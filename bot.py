@@ -51,21 +51,17 @@ def humanbytes(size):
     while size > power: 
         size /= power
         n += 1
-    # 'B' harfini eklerken string formatını düzelt
     return f"{round(size, 2)} {Dic_powerN[n]}B"
 
 async def progress_bar(current, total, message, start, prefix="İşlem"):
     """
     Telegram mesajını düzenleyerek bir ilerleme çubuğu gösterir.
-    Pyrogram'ın 'progress' parametresi ile uyumlu olarak 'message' ve 'start' değerlerini alır.
     """
     now = time.time()
     diff = now - start
     
-    # Her 5 saniyede bir veya işlem bittiğinde mesajı güncelle
-    # NOT: Pyrogram, kritik güncellemeleri kendi içinde zaten hızlandırır.
     if round(diff % 5) == 0 or current == total:
-        if diff == 0: diff = 1 # Sıfıra bölme hatasını önle
+        if diff == 0: diff = 1 
         
         percentage = current * 100 / total
         speed = current / diff
@@ -80,13 +76,12 @@ async def progress_bar(current, total, message, start, prefix="İşlem"):
         bar = '🟢' * filled_length + '⚪' * (bar_length - filled_length)
         progress = f"[{bar}] {round(percentage, 2)}%"
         
-        # Güncellenen metin
         text = f"**{prefix}**\n\n{progress}\n**Durum:** {humanbytes(current)} / {humanbytes(total)}\n**Hız:** {humanbytes(speed)}/s\n**Kalan Süre (ETA):** {eta}s"
         
         try: 
             await message.edit_text(text)
         except Exception: 
-            pass # Sık güncelleme hatalarını yoksay
+            pass 
 
 # --- FFPROBE ve FFMPEG Fonksiyonları ---
 
@@ -96,7 +91,6 @@ async def get_audio_stream_info(path_to_file):
     """
     cmd_probe = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", path_to_file]
     
-    # Asenkron olarak subprocess çalıştırma
     process = await asyncio.create_subprocess_exec(
         *cmd_probe,
         stdout=asyncio.subprocess.PIPE,
@@ -120,7 +114,6 @@ async def get_audio_stream_info(path_to_file):
         lang = stream.get("tags", {}).get("language", "").lower()
         title = stream.get("tags", {}).get("title", "").lower()
         
-        # Türkçe akışı kontrol et
         if lang in ["tur", "trk", "turkish"] or "türkçe" in title:
             turkish_stream_index = stream["index"]
             break
@@ -140,21 +133,18 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     dir_name = os.path.dirname(path_to_file)
     filename = os.path.splitext(os.path.basename(path_to_file))[0]
     
-    # Yeni dosya adı formatı: [ORIJINAL_AD]-TR.mp4
     output_path = Path(dir_name) / f"{filename}-TR.mp4"
     
-    # FFmpeg komutu: Ses ve video akışlarını yeniden kodlama yapmadan kopyala.
     cmd_ffmpeg = [
         "ffmpeg",
-        "-i", path_to_file,        # Giriş dosyası
-        "-map", "0:v:0",           # Birinci video akışını al
-        "-map", f"0:{final_audio_index}", # Seçilen ses akışını al
-        "-c", "copy",              # Hızlı kopyalama
-        "-y",                      # Üzerine yaz
-        str(output_path)           # Çıktı dosyası
+        "-i", path_to_file,        
+        "-map", "0:v:0",           
+        "-map", f"0:{final_audio_index}", 
+        "-c", "copy",              
+        "-y",                      
+        str(output_path)           
     ]
 
-    # Asenkron olarak subprocess çalıştırma
     process = await asyncio.create_subprocess_exec(
         *cmd_ffmpeg,
         stdout=asyncio.subprocess.PIPE,
@@ -165,7 +155,6 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     if process.returncode != 0:
         return f"❌ FFMPEG HATA: Ses kopyalama işlemi başarısız oldu. Hata: {stderr.decode('utf-8', errors='ignore')}"
     
-    # Başarılı mesajı
     if is_turkish_present:
         return f"✅ **Türkçe Ses** akışı kopyalanıp ayrı bir dosya oluşturuldu: `{output_path.name}`"
     else:
@@ -181,19 +170,16 @@ async def handle_document(client: Client, message: Message):
     file_name = message.document.file_name
     
     if file_name and ".zip.00" in file_name:
-        # İlerleme mesajını oluştur ve zaman damgasını kaydet
         status_message = await message.reply_text(f"`{file_name}`: İndiriliyor... Lütfen bekleyin.")
         start_time = time.time()
         
         try:
-            # Pyrogram'ın 'download' metodunu progress ve progress_args ile kullanma
             download_path = await message.download(
                 file_name=os.path.join(DOWNLOAD_DIR, file_name),
                 progress=progress_bar, 
                 progress_args=(status_message, start_time, f"**{Path(file_name).name}** İndiriliyor")
             )
             
-            # Başarılı indirme sonrası mesajı düzenle
             await status_message.edit_text(
                 f"✅ Parça başarıyla indirildi: `{Path(download_path).name}`\n"
                 f"Tüm parçaları gönderdikten sonra **`/uz`** komutunu kullanın."
@@ -208,11 +194,10 @@ async def handle_document(client: Client, message: Message):
 @app.on_message(filters.command("uz") & filters.private)
 async def uz_command(client: Client, message: Message):
     """
-    /uz komutu ile çıkarma işlemini tetikler ve çıkan video dosyalarında ses işleme başlatır.
+    /uz komutu ile çıkarma işlemini tetikler.
     """
     await message.reply_text("🔍 ZIP çıkarma işlemi başlatılıyor. `DOWNLOAD_DIR` içindeki tüm `.zip.001` dosyaları taranıyor...")
 
-    # İndirme klasöründeki tüm .zip.001 dosyalarını bul
     first_part_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.zip.001"))
     
     if not first_part_files:
@@ -229,38 +214,44 @@ async def uz_command(client: Client, message: Message):
         
         status_msg = await message.reply_text(f"\n--- **{base_name}** albümü için çıkarma başlatılıyor. ---")
         
-        # 7z çıkarma komutu
-        command = ["7z", "x", first_part_path, f"-o{final_output_path_base}", "-y"]
+        # --- KRİTİK DÜZELTME: SADECE DOSYA ADINI KULLAN ---
+        command = [
+            "7z", 
+            "x", 
+            Path(first_part_path).name, # BURASI DÜZELTİLDİ
+            f"-o{final_output_path_base}", 
+            "-y"
+        ]
         
         try:
-            # Senkron subprocess (7z genellikle hızlı çalışır, ama büyük dosyalarda botu bloke edebilir)
-            process = subprocess.run(command, cwd=DOWNLOAD_DIR, capture_output=True, text=True, timeout=None, check=True) 
+            # Senkron komutu event loop'u bloke etmemesi için asyncio.to_thread ile sarıyoruz.
+            process = await asyncio.to_thread(
+                subprocess.run, 
+                command, 
+                cwd=DOWNLOAD_DIR, # Bu, 7z'nin parçaları bulmasını sağlayan anahtar
+                capture_output=True, 
+                text=True, 
+                timeout=None, 
+                check=True
+            )
             await status_msg.edit_text(f"✅ **{base_name}** ZIP çıkarma işlemi tamamlandı!")
             
             # --- SES İŞLEME KISMI ---
-            
-            # Çıkarılan video dosyalarını bul (.mkv, .mp4, .avi vb.)
             video_files = []
             for ext in ["*.mkv", "*.mp4", "*.avi", "*.mov"]:
                 video_files.extend(glob.glob(os.path.join(final_output_path_base, "**", ext), recursive=True))
-
-            if not video_files:
-                await message.reply_text(f"⚠️ `{base_name}` klasöründe video dosyası bulunamadı. Ses işlemi atlanıyor.")
             
             for video_file in video_files:
                 await message.reply_text(f"🎵 Video bulundu: `{Path(video_file).name}`. Ses akışı analiz ediliyor...")
                 
-                # 1. Ses akışı bilgilerini al
                 final_audio_index, is_turkish_present = await get_audio_stream_info(video_file)
                 
-                if final_audio_index is None:
+                if final_audio_index is not None:
+                    result_msg = await process_audio_only(video_file, final_audio_index, is_turkish_present)
+                    await message.reply_text(result_msg)
+                else:
                     await message.reply_text("❌ Ses akışı bilgisi alınamadı, işlem atlanıyor.")
-                    continue
-                
-                # 2. Ses akışını kopyala ve yeni dosya oluştur
-                result_msg = await process_audio_only(video_file, final_audio_index, is_turkish_present)
-                await message.reply_text(result_msg)
-            
+
             # --- SİLME İŞLEMİ ---
             try:
                 base_zip_name = first_part_filename.replace(".001", "")
@@ -271,7 +262,8 @@ async def uz_command(client: Client, message: Message):
                 await message.reply_text(f"Uyarı: Parçalar silinirken hata oluştu: {e}")
 
         except subprocess.CalledProcessError as e:
-            error_message = f"❌ HATA: **{base_name}** çıkarma işlemi başarısız oldu! Hata Kodu: {e.returncode}"
+            error_message = f"❌ HATA: **{base_name}** çıkarma işlemi başarısız oldu! Hata Kodu: {e.returncode}\n"
+            error_message += f"7z Hata Çıktısı: `{e.stderr}`\n"
             await status_msg.edit_text(error_message)
 
         except FileNotFoundError as e:
@@ -295,4 +287,4 @@ async def start_command(client: Client, message: Message):
 if __name__ == "__main__":
     print(f"Bot Başlatılıyor... İndirme Dizini: {DOWNLOAD_DIR}")
     app.run()
-      
+    
