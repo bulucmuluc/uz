@@ -101,7 +101,6 @@ async def get_audio_stream_info(path_to_file):
     try:
         video_info = json.loads(stdout.decode('utf-8'))
     except json.JSONDecodeError:
-        print(f"HATA: FFprobe çıktısı JSON olarak çözülemedi: {stderr.decode('utf-8')}")
         return None, False
 
     audio_streams = [s for s in video_info.get("streams", []) if s.get("codec_type") == "audio"]
@@ -214,11 +213,11 @@ async def uz_command(client: Client, message: Message):
         
         status_msg = await message.reply_text(f"\n--- **{base_name}** albümü için çıkarma başlatılıyor. ---")
         
-        # --- KRİTİK DÜZELTME: SADECE DOSYA ADINI KULLAN ---
+        # --- KRİTİK DÜZELTME: 'x' yerine 'e' (Extract) kullanılıyor ve sadece dosya adı ile çalışılıyor ---
         command = [
             "7z", 
-            "x", 
-            Path(first_part_path).name, # BURASI DÜZELTİLDİ
+            "e", # Düzeltme: 'x' yerine 'e' (Extract - İç klasör yapısını yoksayar)
+            Path(first_part_path).name, 
             f"-o{final_output_path_base}", 
             "-y"
         ]
@@ -234,12 +233,16 @@ async def uz_command(client: Client, message: Message):
                 timeout=None, 
                 check=True
             )
-            await status_msg.edit_text(f"✅ **{base_name}** ZIP çıkarma işlemi tamamlandı!")
+            await status_msg.edit_text(f"✅ **{base_name}** ZIP çıkarma işlemi tamamlandı! Dosyalar: `{final_output_path_base}`")
             
             # --- SES İŞLEME KISMI ---
+            
+            # Çıkarılan video dosyalarını bul (.mkv, .mp4, .avi vb.)
+            # 'e' parametresi alt klasör oluşturmadığı için arama derinliği 1 olmalı (recursive=False)
             video_files = []
             for ext in ["*.mkv", "*.mp4", "*.avi", "*.mov"]:
-                video_files.extend(glob.glob(os.path.join(final_output_path_base, "**", ext), recursive=True))
+                 # Yolu string'e çevirerek glob kullanıyoruz
+                video_files.extend(glob.glob(str(final_output_path_base / ext), recursive=False))
             
             for video_file in video_files:
                 await message.reply_text(f"🎵 Video bulundu: `{Path(video_file).name}`. Ses akışı analiz ediliyor...")
@@ -287,4 +290,3 @@ async def start_command(client: Client, message: Message):
 if __name__ == "__main__":
     print(f"Bot Başlatılıyor... İndirme Dizini: {DOWNLOAD_DIR}")
     app.run()
-    
