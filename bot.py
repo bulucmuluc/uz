@@ -148,11 +148,11 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
 
 # --- STREAMTAPE YÜKLEME FONKSİYONU ---
 
-async def upload_to_streamtape(client: Client, message: Message, path_to_file: str):
+async def upload_to_streamtape(client: Client, message: Message, path_to_file: str) -> bool:
     
     if not os.path.exists(path_to_file):
         await message.reply_text(f"❌ Yüklenecek dosya bulunamadı: {Path(path_to_file).name}")
-        return
+        return False
         
     a = await message.reply_text("Streamtape API'ye bağlanılıyor...", quote=True) 
     file_size = os.path.getsize(path_to_file)
@@ -212,7 +212,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                     f"❌ Streamtape API'den Yükleme URL'si alınamadı!\n"
                     f"HTTP Durumu: {http_status} | API Durumu: {json_data.get('status')}"
                 )
-                return
+                return False
 
             temp_api = json_data["result"]["url"]
             await a.edit_text(f"Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...")
@@ -245,7 +245,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                     f"❌ Dosya Streamtape'e yüklenirken hata oluştu!\n"
                     f"HTTP Durumu: {upload_http_status}\nAPI Durumu: {status}\nMesaj: {error_msg}"
                 )
-                return
+                return False
 
             success = True
             await message.reply_text(
@@ -259,11 +259,14 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                     ]
                 )
             )
+            return True
             
     except Exception as e:
         await a.edit_text(f"❌ Streamtape Yükleme Sırasında Beklenmedik Hata: {e}")
+        return False
         
     finally:
+        # Streamtape yüklemesinde kullanılan -TR.mp4 dosyasını her zaman sil
         if os.path.exists(path_to_file):
             try:
                 os.remove(path_to_file)
@@ -407,15 +410,22 @@ async def uz_command(client: Client, message: Message):
                     
                     if new_file_path and os.path.exists(new_file_path):
                         await message.reply_text("✅ FFMPEG başarılı ve dosya (-TR.mp4) bulundu! Streamtape yüklemesi çağrılıyor.")
-                        await upload_to_streamtape(client, message, new_file_path) 
+                        
+                        # Yükleme durumunu kontrol et
+                        upload_successful = await upload_to_streamtape(client, message, new_file_path) 
+                        
+                        if upload_successful:
+                            # SADECE yükleme başarılıysa orijinal dosyayı sil
+                            try: 
+                                os.remove(video_file_path)
+                                await message.reply_text(f"🗑️ Orijinal video dosyası silindi: {video_file_path.name}")
+                            except Exception as e:
+                                await message.reply_text(f"⚠️ Orijinal dosya silinemedi: {e}")
+                        else:
+                            await message.reply_text(f"❌ Streamtape yüklemesi başarısız oldu. Orijinal video dosyası sunucuda tutuluyor: {video_file_path.name}")
+                            
                     else:
                         await message.reply_text("❌ FFMPEG işlemi başarısız oldu veya -TR.mp4 dosyası oluşmadı. Streamtape yüklemesi atlanıyor.")
-                        
-                    try: 
-                        os.remove(video_file_path)
-                        await message.reply_text(f"🗑️ Orijinal video dosyası silindi: {video_file_path.name}")
-                    except Exception: 
-                        pass
                         
                 else:
                     await message.reply_text("❌ Ses akışı bilgisi alınamadı, FFMPEG/Streamtape işlemi atlanıyor.")
@@ -432,7 +442,7 @@ async def uz_command(client: Client, message: Message):
             await status_msg.edit_text(f"❌ HATA: {base_name} çıkarma işlemi başarısız oldu! Hata Kodu: {e.returncode}. Detaylı log sunucuda (terminal).")
 
         except FileNotFoundError as e:
-            await message.reply_text(f"❌ KRİTİK HATA: {e} komutu bulunamadı. Lütfen 7z/ffmpeg kurun.")
+            await status_msg.edit_text(f"❌ KRİTİK HATA: {e} komutu bulunamadı. Lütfen 7z/ffmpeg kurun.")
 
     await message.reply_text("\n🎉 Tüm işlemler tamamlandı.")
 
