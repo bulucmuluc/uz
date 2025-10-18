@@ -9,6 +9,7 @@ from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
+import aiohttp 
 
 load_dotenv()
 
@@ -201,20 +202,23 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             
             Main_API = "https://api.streamtape.com/file/ul?login={}&key={}"
             
+            # Yükleme URL'si talep edilirken terminale log yaz
+            print("[Streamtape] Yükleme URL'si talep ediliyor...")
             await a.edit_text("Streamtape: Yükleme URL'si talep ediliyor...")
+
             hit_api = await session.get(Main_API.format(Config.STREAMTAPE_API_USERNAME, Config.STREAMTAPE_API_PASS))
             
             http_status = hit_api.status
             json_data = await hit_api.json()
             
             if json_data.get("status") != 200:
-                await a.edit_text(
-                    f"❌ Streamtape API'den Yükleme URL'si alınamadı!\n"
-                    f"HTTP Durumu: {http_status} | API Durumu: {json_data.get('status')}"
-                )
+                # API hatası terminale yazılır
+                print(f"❌ [Streamtape HATA] Yükleme URL'si alınamadı! HTTP: {http_status} | API Durumu: {json_data.get('status')} | Mesaj: {json_data.get('msg')}")
+                await a.edit_text("❌ Streamtape API'den Yükleme URL'si alınamadı! Detaylı Hata terminalde.")
                 return False
 
             temp_api = json_data["result"]["url"]
+            print(f"✅ [Streamtape] Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...")
             await a.edit_text(f"Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...")
             
             data = aiohttp.FormData()
@@ -241,10 +245,9 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             
             if int(status) != 200 or not download_link:
                 error_msg = data_f.get("msg", "Bilinmeyen API Hatası.")
-                await a.edit_text(
-                    f"❌ Dosya Streamtape'e yüklenirken hata oluştu!\n"
-                    f"HTTP Durumu: {upload_http_status}\nAPI Durumu: {status}\nMesaj: {error_msg}"
-                )
+                # Yükleme hatası terminale yazılır
+                print(f"❌ [Streamtape HATA] Dosya yüklenirken hata oluştu! HTTP: {upload_http_status} | API Durumu: {status} | Mesaj: {error_msg}")
+                await a.edit_text("❌ Dosya Streamtape'e yüklenirken hata oluştu! Detaylı Hata terminalde.")
                 return False
 
             success = True
@@ -262,11 +265,12 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             return True
             
     except Exception as e:
-        await a.edit_text(f"❌ Streamtape Yükleme Sırasında Beklenmedik Hata: {e}")
+        # Beklenmedik hata terminale yazılır
+        print(f"❌ [Streamtape KRİTİK HATA] Yükleme Sırasında Beklenmedik Hata: {e}")
+        await a.edit_text("❌ Streamtape Yükleme Sırasında Beklenmedik Hata oluştu! Detaylı Hata terminalde.")
         return False
         
     finally:
-        # Streamtape yüklemesinde kullanılan -TR.mp4 dosyasını her zaman sil
         if os.path.exists(path_to_file):
             try:
                 os.remove(path_to_file)
@@ -411,18 +415,17 @@ async def uz_command(client: Client, message: Message):
                     if new_file_path and os.path.exists(new_file_path):
                         await message.reply_text("✅ FFMPEG başarılı ve dosya (-TR.mp4) bulundu! Streamtape yüklemesi çağrılıyor.")
                         
-                        # Yükleme durumunu kontrol et
                         upload_successful = await upload_to_streamtape(client, message, new_file_path) 
                         
                         if upload_successful:
-                            # SADECE yükleme başarılıysa orijinal dosyayı sil
                             try: 
                                 os.remove(video_file_path)
                                 await message.reply_text(f"🗑️ Orijinal video dosyası silindi: {video_file_path.name}")
                             except Exception as e:
                                 await message.reply_text(f"⚠️ Orijinal dosya silinemedi: {e}")
                         else:
-                            await message.reply_text(f"❌ Streamtape yüklemesi başarısız oldu. Orijinal video dosyası sunucuda tutuluyor: {video_file_path.name}")
+                            # Hata mesajını terminale yönlendirdik. Telegram'a basit bir bilgilendirme gönderiyoruz.
+                            await message.reply_text(f"❌ Streamtape yüklemesi başarısız oldu. Orijinal video dosyası sunucuda tutuluyor: {video_file_path.name}. API Hatası için terminali kontrol edin.")
                             
                     else:
                         await message.reply_text("❌ FFMPEG işlemi başarısız oldu veya -TR.mp4 dosyası oluşmadı. Streamtape yüklemesi atlanıyor.")
