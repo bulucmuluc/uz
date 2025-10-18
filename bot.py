@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import json
@@ -10,6 +11,12 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 import aiohttp 
+
+# --- LOGLAMA YAPILANDIRMASI ---
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    handlers=[logging.FileHandler('log.txt'), logging.StreamHandler()],
+                    level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
 
 # Ortam değişkenlerini (.env dosyasından) yükle
 load_dotenv()
@@ -29,7 +36,7 @@ try:
         raise ValueError("Streamtape API bilgileri eksik.")
 
 except (TypeError, ValueError) as e:
-    print(f"HATA: Yapılandırma hatası: {e}")
+    LOGGER.error(f"HATA: Yapılandırma hatası: {e}")
     exit()
 
 DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR", "downloads")
@@ -89,7 +96,7 @@ async def progress_bar(current, total, message, start, prefix="İşlem"):
         try: 
             await message.edit_text(text) 
         except Exception as e: 
-            print(f"Progress bar edit_text hatası: {e}")
+            LOGGER.debug(f"Progress bar edit_text hatası: {e}")
             pass 
 
 # --- FFPROBE ve FFMPEG Fonksiyonları ---
@@ -205,7 +212,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             
             Main_API = "https://api.streamtape.com/file/ul?login={}&key={}"
             
-            print("[Streamtape] Yükleme URL'si talep ediliyor...")
+            LOGGER.info("[Streamtape] Yükleme URL'si talep ediliyor...")
             await a.edit_text("Streamtape: Yükleme URL'si talep ediliyor...")
 
             hit_api = await session.get(Main_API.format(Config.STREAMTAPE_API_USERNAME, Config.STREAMTAPE_API_PASS))
@@ -214,12 +221,12 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             json_data = await hit_api.json()
             
             if json_data.get("status") != 200:
-                print(f"❌ [Streamtape HATA] Yükleme URL'si alınamadı! HTTP: {http_status} | API Durumu: {json_data.get('status')} | Mesaj: {json_data.get('msg')}")
+                LOGGER.error(f"❌ [Streamtape HATA] Yükleme URL'si alınamadı! HTTP: {http_status} | API Durumu: {json_data.get('status')} | Mesaj: {json_data.get('msg')}")
                 await a.edit_text("❌ Streamtape API'den Yükleme URL'si alınamadı! Detaylı Hata terminalde.")
                 return False
 
             temp_api = json_data["result"]["url"]
-            print(f"✅ [Streamtape] Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...")
+            LOGGER.info(f"✅ [Streamtape] Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...")
             await a.edit_text(f"Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...")
             
             data = aiohttp.FormData()
@@ -248,7 +255,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             
             if int(status) != 200 or not download_link:
                 error_msg = data_f.get("msg", "Bilinmeyen API Hatası.")
-                print(f"❌ [Streamtape HATA] Dosya yüklenirken hata oluştu! HTTP: {upload_http_status} | API Durumu: {status} | Mesaj: {error_msg}")
+                LOGGER.error(f"❌ [Streamtape HATA] Dosya yüklenirken hata oluştu! HTTP: {upload_http_status} | API Durumu: {status} | Mesaj: {error_msg}")
                 await a.edit_text("❌ Dosya Streamtape'e yüklenirken hata oluştu! Detaylı Hata terminalde.")
                 return False
 
@@ -267,7 +274,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             return True
             
     except Exception as e:
-        print(f"❌ [Streamtape KRİTİK HATA] Yükleme Sırasında Beklenmedik Hata: {e}")
+        LOGGER.critical(f"❌ [Streamtape KRİTİK HATA] Yükleme Sırasında Beklenmedik Hata: {e}")
         await a.edit_text("❌ Streamtape Yükleme Sırasında Beklenmedik Hata oluştu! Detaylı Hata terminalde.")
         return False
         
@@ -296,6 +303,7 @@ async def handle_document(client: Client, message: Message):
         start_time = time.time()
         
         try:
+            # Pyrogram'ın kendi indirme fonksiyonu progress_bar'ı kullanır
             download_path = await message.download(
                 file_name=os.path.join(DOWNLOAD_DIR, file_name),
                 progress=progress_bar, 
@@ -359,7 +367,7 @@ async def uz_command(client: Client, message: Message):
                 decoded_line = line.decode('utf-8', errors='ignore').strip()
                 if decoded_line:
                     log_content += decoded_line + "\n"
-                    print(f"[7Z LOG - {base_name}]: {decoded_line}")
+                    LOGGER.info(f"[7Z LOG - {base_name}]: {decoded_line}")
 
 
             returncode = await process.wait()
@@ -367,10 +375,7 @@ async def uz_command(client: Client, message: Message):
             if returncode != 0:
                  raise subprocess.CalledProcessError(returncode, command, stdout=log_content.encode(), stderr=b'')
 
-            print("\n" + "="*50)
-            print(f"✅ {base_name} ZIP çıkarma işlemi TAMAMLANDI!")
-            print("DETAYLI LOG BAŞLANGIÇ:\n" + log_content)
-            print("="*50 + "\n")
+            LOGGER.info(f"✅ {base_name} ZIP çıkarma işlemi TAMAMLANDI!")
             
             await status_msg.edit_text(f"✅ {base_name} ZIP çıkarma işlemi tamamlandı! Detaylı log sunucuda (terminal).")
 
@@ -437,13 +442,8 @@ async def uz_command(client: Client, message: Message):
                     await message.reply_text("❌ Ses akışı bilgisi alınamadı, FFMPEG/Streamtape işlemi atlanıyor.")
 
         except subprocess.CalledProcessError as e:
-            error_message = f"❌ HATA: {base_name} çıkarma işlemi başarısız oldu! Hata Kodu: {e.returncode}\n"
-            error_message += f"7z Hata Çıktısı (Son Kısımlar): \n{log_content[-1000:]}"
-            
-            print("\n" + "#"*50)
-            print(f"❌ {base_name} çıkarma işlemi BAŞARISIZ OLDU!")
-            print("DETAYLI HATA LOGU BAŞLANGIÇ:\n" + error_message)
-            print("#"*50 + "\n")
+            error_message = f"❌ HATA: {base_name} çıkarma işlemi başarısız oldu! Hata Kodu: {e.returncode}"
+            LOGGER.error(f"❌ {base_name} çıkarma işlemi BAŞARISIZ OLDU! Hata: {error_message}")
             
             await status_msg.edit_text(f"❌ HATA: {base_name} çıkarma işlemi başarısız oldu! Hata Kodu: {e.returncode}. Detaylı log sunucuda (terminal).")
 
@@ -499,5 +499,5 @@ async def start_command(client: Client, message: Message):
 
 # Botu çalıştır
 if __name__ == "__main__":
-    print(f"Bot Başlatılıyor... İndirme Dizini: {DOWNLOAD_DIR}")
+    LOGGER.info(f"Bot Başlatılıyor... İndirme Dizini: {DOWNLOAD_DIR}")
     app.run()
