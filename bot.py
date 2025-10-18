@@ -92,7 +92,8 @@ async def progress_bar(current, total, message, start, prefix="İşlem"):
         text = f"**{prefix}**\n\n{progress}\n**Durum:** {humanbytes(current)} / {humanbytes(total)}\n**Hız:** {humanbytes(speed)}/s\n**Kalan Süre (ETA):** {eta}s"
         
         try: 
-            await message.edit_text(text)
+            # MarkdownV2 kullanıldı
+            await message.edit_text(text, parse_mode="markdownv2") 
         except Exception: 
             pass 
 
@@ -136,7 +137,6 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     dir_name = os.path.dirname(path_to_file)
     filename = os.path.splitext(os.path.basename(path_to_file))[0]
     
-    # Yeni oluşturulan dosyanın tam yolunu Path objesi ile oluştur
     output_path = Path(dir_name) / f"{filename}-TR.mp4"
     
     cmd_ffmpeg = [
@@ -150,7 +150,6 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     if process.returncode != 0:
         return None, f"❌ FFMPEG HATA: Ses kopyalama işlemi başarısız oldu. Hata: {stderr.decode('utf-8', errors='ignore')}"
     
-    # Başarılı dönüşte oluşturulan dosyanın tam yolunu döndür
     if is_turkish_present:
         return str(output_path), f"✅ **Türkçe Ses** akışı kopyalanıp ayrı bir dosya oluşturuldu: `{output_path.name}`"
     else:
@@ -192,6 +191,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                 self.uploaded += len(chunk)
                 
                 now = time.time()
+                # progress_bar artık parse_mode="markdownv2" kullanıyor.
                 if now - self.last_update >= 5 or self.uploaded == self.total:
                     try:
                         await progress_bar(
@@ -208,7 +208,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             return chunk
             
         def close(self):
-                self.file.close()
+            self.file.close()
 
     success = False
     
@@ -250,6 +250,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             upload_http_status = response.status
             
             try:
+                # content_type=None, API'nin non-JSON response durumlarında hata vermesini önler.
                 data_f = await response.json(content_type=None)
             except aiohttp.ContentTypeError:
                 data_f = {} 
@@ -268,9 +269,9 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             # 3. Başarılı Sonuçları İşle
             success = True
             await message.reply_text(
-                f"**Yükleme Başarılı!** (HTTP `{upload_http_status}`, API `{status}`)\n"
+                f"**Yükleme Başarılı!** \(HTTP `{upload_http_status}`, API `{status}`\)\n"
                 f"**Dosya Adı:** `{filename}`\n\n**İndirme Linki:** `{download_link}`",
-                parse_mode="markdown",
+                parse_mode="markdownv2", # parse_mode="markdownv2" kullanıldı
                 disable_web_page_preview=True,
                 reply_markup=InlineKeyboardMarkup(
                     [
@@ -309,6 +310,7 @@ async def handle_document(client: Client, message: Message):
         try:
             download_path = await message.download(
                 file_name=os.path.join(DOWNLOAD_DIR, file_name),
+                # progress_bar artık parse_mode="markdownv2" kullanıyor.
                 progress=progress_bar, 
                 progress_args=(status_message, start_time, f"**{Path(file_name).name}** İndiriliyor")
             )
@@ -354,7 +356,7 @@ async def uz_command(client: Client, message: Message):
             "-y"
         ]
         
-        log_content = f"**7z Çıktı Akışı (Log):**\n```\n"
+        log_content = "" # log_content başlatıldı
         
         try:
             # 7z çıkarma işleminin gerçek zamanlı log akışı
@@ -365,6 +367,7 @@ async def uz_command(client: Client, message: Message):
                 cwd=None
             )
             
+            # Log içeriği Telegram'a akıtılmıyor, sadece terminale yazılmak için toplanıyor
             while True:
                 line = await process.stdout.readline()
                 if not line:
@@ -372,17 +375,10 @@ async def uz_command(client: Client, message: Message):
                     
                 decoded_line = line.decode('utf-8', errors='ignore').strip()
                 if decoded_line:
-                    # Log içeriğini limitler
                     log_content += decoded_line + "\n"
-                    if len(log_content) > 3500: 
-                        log_content = log_content[-3500:] 
-                        log_content = log_content[log_content.find('\n')+1:] 
-                        
-                    try:
-                        # Log mesajını her yeni satırda güncelle
-                        await status_msg.edit_text(log_content + "\n```", parse_mode="markdown")
-                    except Exception:
-                        pass 
+                    # Log içeriğini terminale anlık olarak yazdır
+                    print(f"[7Z LOG - {base_name}]: {decoded_line}")
+
 
             # İşlemin bitmesini bekle
             returncode = await process.wait()
@@ -390,9 +386,15 @@ async def uz_command(client: Client, message: Message):
             if returncode != 0:
                  raise subprocess.CalledProcessError(returncode, command, stdout=log_content.encode(), stderr=b'')
 
-            # Başarı mesajı
-            final_log_msg = f"✅ **{base_name}** ZIP çıkarma işlemi tamamlandı!\n\n" + log_content + "\n```"
-            await status_msg.edit_text(final_log_msg, parse_mode="markdown")
+            # Başarı sonrası Terminal'e logu yazdır ve Telegram'a basit mesaj gönder
+            print("\n" + "="*50)
+            print(f"✅ {base_name} ZIP çıkarma işlemi TAMAMLANDI!")
+            print("DETAYLI LOG BAŞLANGIÇ:\n" + log_content)
+            print("="*50 + "\n")
+            
+            # Telegram'a sadece basit bir başarı mesajı gönder (markdownv2 ile)
+            await status_msg.edit_text(f"✅ **{base_name}** ZIP çıkarma işlemi tamamlandı\! Detaylı log sunucuda \(terminal\).", parse_mode="markdownv2")
+
 
             # --- ZIP SİLME İŞLEMİ (Temizlik) ---
             try:
@@ -434,20 +436,20 @@ async def uz_command(client: Client, message: Message):
                 if final_audio_index is not None:
                     
                     # Hata Ayıklama Adımı 2: Ses İşleme Başlangıcı
-                    await message.reply_text(f"🔊 Ses akışı (Index {final_audio_index}) ile FFMPEG işlemi başlatılıyor...")
+                    await message.reply_text(f"🔊 Ses akışı \(Index {final_audio_index}\) ile FFMPEG işlemi başlatılıyor\.", parse_mode="markdownv2")
                     
                     # new_file_path burada -TR.mp4 dosyasının yolunu alır
                     new_file_path, result_msg = await process_audio_only(str(video_file_path), final_audio_index, is_turkish_present)
-                    await message.reply_text(result_msg)
+                    await message.reply_text(result_msg, parse_mode="markdownv2")
                     
                     # --- Hata Ayıklama Adımı 3: Streamtape Kontrolü (KRİTİK BÖLGE) ---
                     if new_file_path and os.path.exists(new_file_path):
-                        await message.reply_text("✅ FFMPEG başarılı ve dosya (`-TR.mp4`) bulundu! Streamtape yüklemesi çağrılıyor...")
+                        await message.reply_text("✅ FFMPEG başarılı ve dosya \(`-TR\.mp4`\) bulundu\! Streamtape yüklemesi çağrılıyor\.", parse_mode="markdownv2")
                         # Streamtape yüklemesini çağır ve await ile bitmesini bekle
                         await upload_to_streamtape(client, message, new_file_path) 
                     else:
                         # new_file_path None döndüyse veya dosya oluşmadıysa (FFMPEG hatası)
-                        await message.reply_text("❌ FFMPEG işlemi başarısız oldu veya `-TR.mp4` dosyası oluşmadı. Streamtape yüklemesi atlanıyor.")
+                        await message.reply_text("❌ FFMPEG işlemi başarısız oldu veya \`-TR\.mp4\` dosyası oluşmadı\. Streamtape yüklemesi atlanıyor\.", parse_mode="markdownv2")
                         
                     # Yükleme sonrası Orijinal video dosyasını sil
                     try: 
@@ -460,9 +462,17 @@ async def uz_command(client: Client, message: Message):
                     await message.reply_text("❌ Ses akışı bilgisi alınamadı, FFMPEG/Streamtape işlemi atlanıyor.")
 
         except subprocess.CalledProcessError as e:
+            # Hata oluştuğunda Terminal'e logu yazdır ve Telegram'a basit mesaj gönder
             error_message = f"❌ HATA: **{base_name}** çıkarma işlemi başarısız oldu! Hata Kodu: {e.returncode}\n"
-            error_message += f"7z Hata Çıktısı (Son Kısımlar): \n```\n{log_content[-1000:]}...\n```"
-            await status_msg.edit_text(error_message, parse_mode="markdown")
+            error_message += f"7z Hata Çıktısı (Son Kısımlar): \n{log_content[-1000:]}"
+            
+            print("\n" + "#"*50)
+            print(f"❌ {base_name} çıkarma işlemi BAŞARISIZ OLDU!")
+            print("DETAYLI HATA LOGU BAŞLANGIÇ:\n" + error_message)
+            print("#"*50 + "\n")
+            
+            # Telegram'a sadece basit bir hata mesajı gönder (markdownv2 ile)
+            await status_msg.edit_text(f"❌ HATA: **{base_name}** çıkarma işlemi başarısız oldu\! Hata Kodu: {e.returncode}\. Detaylı log sunucuda \(terminal\)\.", parse_mode="markdownv2")
 
         except FileNotFoundError as e:
             await message.reply_text(f"❌ KRİTİK HATA: {e} komutu bulunamadı. Lütfen 7z/ffmpeg kurun.")
@@ -483,7 +493,7 @@ async def callback_handler(client: Client, cb):
         token = download_link.split("/v/", 1)[-1].split("?", 1)[0]
         
         async with aiohttp.ClientSession() as session:
-            del_api = "[https://api.streamtape.com/file/delete?login=](https://api.streamtape.com/file/delete?login=){}&key={}&file={}"
+            del_api = "https://api.streamtape.com/file/delete?login={}&key={}&file={}"
             data_f = await session.get(
                 del_api.format(Config.STREAMTAPE_API_USERNAME, Config.STREAMTAPE_API_PASS, token))
             json_data = await data_f.json()
@@ -495,7 +505,7 @@ async def callback_handler(client: Client, cb):
                 await client.send_message(
                     chat_id=cb.message.chat.id,
                     text=f"#STREAMTAPE_DELETE:\n\n[{cb.from_user.first_name}](tg://user?id={cb.from_user.id}) Deleted {download_link}",
-                    parse_mode="markdown", disable_web_page_preview=True
+                    parse_mode="markdownv2", disable_web_page_preview=True # parse_mode="markdownv2" kullanıldı
                 )
             else:
                 await cb.message.edit_text(f"❌ Dosya Silinemedi! Durum: {status}")
