@@ -69,6 +69,7 @@ async def progress_bar(current, total, message, start, prefix="İşlem"):
     now = time.time()
     diff = now - start
     
+    # Her 5 saniyede bir veya tamamlandığında güncelle
     if round(diff % 5) == 0 or current == total:
         if diff == 0: diff = 1 
         
@@ -179,7 +180,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
         def __len__(self):
             return self.total
 
-        # Düzeltme: aiohttp'un beklediği senkron read metodu
+        # DÜZELTME: aiohttp'un beklediği senkron read metodu
         def read(self, size): 
             chunk = self.file.read(size) 
             if chunk:
@@ -187,7 +188,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                 
                 now = time.time()
                 if now - self.last_update >= 5 or self.uploaded == self.total:
-                    # İlerleme çubuğunu arka planda asenkron olarak güncelle
+                    # İlerleme çubuğunu arka planda asenkron olarak güncellemek için
                     asyncio.create_task(
                         progress_bar(
                             self.uploaded, 
@@ -234,6 +235,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             
             file_reader = ProgressFile(path_to_file, a, file_size)
 
+            # KRİTİK DÜZELTME: Senkron okuyucuyu aiohttp FormData'ya ekle
             data.add_field(
                 'file1',
                 file_reader, 
@@ -279,6 +281,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
         return False
         
     finally:
+        # Dosya okuyucuyu kapat
         if file_reader:
             file_reader.close()
             
@@ -303,7 +306,6 @@ async def handle_document(client: Client, message: Message):
         start_time = time.time()
         
         try:
-            # Pyrogram'ın kendi indirme fonksiyonu progress_bar'ı kullanır
             download_path = await message.download(
                 file_name=os.path.join(DOWNLOAD_DIR, file_name),
                 progress=progress_bar, 
