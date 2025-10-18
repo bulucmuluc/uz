@@ -65,7 +65,7 @@ def humanbytes(size):
         n += 1
     return f"{round(size, 2)} {Dic_powerN[n]}B"
 
-# Pyrogram'ın kendi indirme işlemi için ilerleme çubuğu
+# Pyrogram'ın kendi indirme işlemi için ilerleme çubuğu (Yükleme için değil)
 async def progress_bar(current, total, message, start, prefix="İşlem"):
     now = time.time()
     diff = now - start
@@ -156,7 +156,7 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     else:
         return str(output_path), f"⚠️ Türkçe Ses bulunamadı, mevcut herhangi bir akış ({final_audio_index}) kopyalandı: {output_path.name}"
 
-# --- STREAMTAPE YÜKLEME FONKSİYONU (PROGRESSFILE İPTAL EDİLDİ) ---
+# --- STREAMTAPE YÜKLEME FONKSİYONU (Hata Çözümlü) ---
 
 async def upload_to_streamtape(client: Client, message: Message, path_to_file: str) -> bool:
     
@@ -189,13 +189,11 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             temp_api = json_data["result"]["url"]
             LOGGER.info(f"✅ [Streamtape] Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...")
             
-            # NOT: Bu noktadan itibaren ilerleme çubuğu gösterilmez.
-            await a.edit_text(f"Yükleme URL'si alındı. Yükleme başladı...")
+            await a.edit_text(f"Yükleme URL'si alındı. Dosya yükleniyor...")
             
             filename = Path(path_to_file).name.replace("_", " ") 
             
-            # KRİTİK DÜZELTME: Dosyayı standart senkron okuyucu ile yükle. 
-            # Bu, ProgressFile'ın neden olduğu seri hale getirme hatasını çözer.
+            # KRİTİK DÜZELTME: ProgressFile yerine standart dosya okuma kullanıldı.
             with open(path_to_file, 'rb') as f:
                 data = aiohttp.FormData()
                 data.add_field(
@@ -223,6 +221,9 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                 await a.edit_text("❌ Dosya Streamtape'e yüklenirken hata oluştu! Detaylı Hata terminalde.")
                 return False
 
+            # KRİTİK DÜZELTME: Callback verisi için kısa token çıkarılıyor.
+            token = download_link.split("/v/", 1)[-1].split("?", 1)[0]
+            
             success = True
             await message.reply_text(
                 f"Yükleme Başarılı! (HTTP {upload_http_status}, API {status})\n"
@@ -231,7 +232,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                 reply_markup=InlineKeyboardMarkup(
                     [
                         [InlineKeyboardButton("Link'i Aç", url=download_link)],
-                        [InlineKeyboardButton("Dosyayı Sil", callback_data=f"deletestream_{download_link}")] 
+                        [InlineKeyboardButton("Dosyayı Sil", callback_data=f"del_{token}")] # <-- Yeni kısa callback data
                     ]
                 )
             )
@@ -413,16 +414,15 @@ async def uz_command(client: Client, message: Message):
 
     await message.reply_text("\n🎉 Tüm işlemler tamamlandı.")
 
-# --- CALLBACK QUERY HANDLER ---
+# --- CALLBACK QUERY HANDLER (Token Düzeltmeli) ---
 
 @app.on_callback_query()
 async def callback_handler(client: Client, cb):
     
-    if cb.data.startswith("deletestream_"):
+    if cb.data.startswith("del_"): # <-- Yeni format: del_
         await cb.answer("Silme işlemi başlatılıyor...")
         
-        download_link = cb.data.split("deletestream_", 1)[1] 
-        token = download_link.split("/v/", 1)[-1].split("?", 1)[0]
+        token = cb.data.split("del_", 1)[1] # <-- Token'ı callback verisinden al
         
         async with aiohttp.ClientSession() as session:
             del_api = "https://api.streamtape.com/file/delete?login={}&key={}&file={}"
@@ -433,10 +433,10 @@ async def callback_handler(client: Client, cb):
             status = json_data.get('msg', json_data.get('status'))
             
             if status == "OK" or status == 200:
-                await cb.message.edit_text(f"✅ Dosya başarıyla Silindi: {token}")
+                await cb.message.edit_text(f"✅ Dosya başarıyla Silindi: `{token}`")
                 await client.send_message(
                     chat_id=cb.message.chat.id,
-                    text=f"#STREAMTAPE_DELETE:\n\n{cb.from_user.first_name} Deleted {download_link}",
+                    text=f"#STREAMTAPE_DELETE:\n\n{cb.from_user.first_name} Deleted token: `{token}`",
                     disable_web_page_preview=True 
                 )
             else:
