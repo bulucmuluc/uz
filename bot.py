@@ -65,11 +65,11 @@ def humanbytes(size):
         n += 1
     return f"{round(size, 2)} {Dic_powerN[n]}B"
 
+# Pyrogram'ın kendi indirme işlemi için ilerleme çubuğu
 async def progress_bar(current, total, message, start, prefix="İşlem"):
     now = time.time()
     diff = now - start
     
-    # Her 5 saniyede bir veya tamamlandığında güncelle
     if round(diff % 5) == 0 or current == total:
         if diff == 0: diff = 1 
         
@@ -156,7 +156,7 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     else:
         return str(output_path), f"⚠️ Türkçe Ses bulunamadı, mevcut herhangi bir akış ({final_audio_index}) kopyalandı: {output_path.name}"
 
-# --- STREAMTAPE YÜKLEME FONKSİYONU ---
+# --- STREAMTAPE YÜKLEME FONKSİYONU (PROGRESSFILE İPTAL EDİLDİ) ---
 
 async def upload_to_streamtape(client: Client, message: Message, path_to_file: str) -> bool:
     
@@ -164,49 +164,9 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
         await message.reply_text(f"❌ Yüklenecek dosya bulunamadı: {Path(path_to_file).name}")
         return False
         
-    a = await message.reply_text("Streamtape API'ye bağlanılıyor...", quote=True) 
-    file_size = os.path.getsize(path_to_file)
+    a = await message.reply_text("Streamtape API'ye bağlanılıyor... (Yükleniyor)", quote=True) 
     
-    class ProgressFile(object):
-        def __init__(self, file_path, status_message, total_size):
-            self.file_path = file_path
-            self.file = open(file_path, 'rb') 
-            self.total = total_size
-            self.uploaded = 0
-            self.status_message = status_message
-            self.start_time = time.time()
-            self.last_update = 0
-            
-        def __len__(self):
-            return self.total
-
-        # DÜZELTME: aiohttp'un beklediği senkron read metodu
-        def read(self, size): 
-            chunk = self.file.read(size) 
-            if chunk:
-                self.uploaded += len(chunk)
-                
-                now = time.time()
-                if now - self.last_update >= 5 or self.uploaded == self.total:
-                    # İlerleme çubuğunu arka planda asenkron olarak güncellemek için
-                    asyncio.create_task(
-                        progress_bar(
-                            self.uploaded, 
-                            self.total, 
-                            self.status_message, 
-                            self.start_time, 
-                            prefix="🚀 Streamtape'e Yükleniyor"
-                        )
-                    )
-                    self.last_update = now
-                    
-            return chunk
-            
-        def close(self):
-            self.file.close()
-
     success = False
-    file_reader = None
     
     try:
         async with aiohttp.ClientSession() as session:
@@ -228,22 +188,24 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
 
             temp_api = json_data["result"]["url"]
             LOGGER.info(f"✅ [Streamtape] Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...")
-            await a.edit_text(f"Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...")
             
-            data = aiohttp.FormData()
+            # NOT: Bu noktadan itibaren ilerleme çubuğu gösterilmez.
+            await a.edit_text(f"Yükleme URL'si alındı. Yükleme başladı...")
+            
             filename = Path(path_to_file).name.replace("_", " ") 
             
-            file_reader = ProgressFile(path_to_file, a, file_size)
-
-            # KRİTİK DÜZELTME: Senkron okuyucuyu aiohttp FormData'ya ekle
-            data.add_field(
-                'file1',
-                file_reader, 
-                filename=filename,
-                content_type='application/octet-stream'
-            )
-            
-            response = await session.post(temp_api, data=data)
+            # KRİTİK DÜZELTME: Dosyayı standart senkron okuyucu ile yükle. 
+            # Bu, ProgressFile'ın neden olduğu seri hale getirme hatasını çözer.
+            with open(path_to_file, 'rb') as f:
+                data = aiohttp.FormData()
+                data.add_field(
+                    'file1',
+                    f, 
+                    filename=filename,
+                    content_type='application/octet-stream'
+                )
+                
+                response = await session.post(temp_api, data=data)
             
             upload_http_status = response.status
             
@@ -281,14 +243,11 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
         return False
         
     finally:
-        # Dosya okuyucuyu kapat
-        if file_reader:
-            file_reader.close()
-            
+        # Temizlik: Yükleme başarılı ise indirilen dosyayı sil
         if os.path.exists(path_to_file):
             try:
-                os.remove(path_to_file)
-                if success:
+                if success: # Sadece yükleme başarılıysa sil
+                    os.remove(path_to_file)
                     await message.reply_text(f"🗑️ Yükleme sonrası son dosya silindi: {Path(path_to_file).name}")
             except Exception as e:
                  await message.reply_text(f"⚠️ Son dosya silinemedi: {e}")
