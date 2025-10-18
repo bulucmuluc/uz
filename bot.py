@@ -11,6 +11,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 import aiohttp 
 
+# Ortam değişkenlerini (.env dosyasından) yükle
 load_dotenv()
 
 # --- YAPILANDIRMA VE SABİTLER ---
@@ -161,7 +162,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
     class ProgressFile(object):
         def __init__(self, file_path, status_message, total_size):
             self.file_path = file_path
-            self.file = open(file_path, 'rb')
+            self.file = open(file_path, 'rb') 
             self.total = total_size
             self.uploaded = 0
             self.status_message = status_message
@@ -171,23 +172,24 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
         def __len__(self):
             return self.total
 
-        async def read(self, size):
-            chunk = await asyncio.to_thread(self.file.read, size)
+        # Düzeltme: aiohttp'un beklediği senkron read metodu
+        def read(self, size): 
+            chunk = self.file.read(size) 
             if chunk:
                 self.uploaded += len(chunk)
                 
                 now = time.time()
                 if now - self.last_update >= 5 or self.uploaded == self.total:
-                    try:
-                        await progress_bar(
+                    # İlerleme çubuğunu arka planda asenkron olarak güncelle
+                    asyncio.create_task(
+                        progress_bar(
                             self.uploaded, 
                             self.total, 
                             self.status_message, 
                             self.start_time, 
                             prefix="🚀 Streamtape'e Yükleniyor"
                         )
-                    except Exception:
-                        pass
+                    )
                     self.last_update = now
                     
             return chunk
@@ -196,13 +198,13 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             self.file.close()
 
     success = False
+    file_reader = None
     
     try:
         async with aiohttp.ClientSession() as session:
             
             Main_API = "https://api.streamtape.com/file/ul?login={}&key={}"
             
-            # Yükleme URL'si talep edilirken terminale log yaz
             print("[Streamtape] Yükleme URL'si talep ediliyor...")
             await a.edit_text("Streamtape: Yükleme URL'si talep ediliyor...")
 
@@ -212,7 +214,6 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             json_data = await hit_api.json()
             
             if json_data.get("status") != 200:
-                # API hatası terminale yazılır
                 print(f"❌ [Streamtape HATA] Yükleme URL'si alınamadı! HTTP: {http_status} | API Durumu: {json_data.get('status')} | Mesaj: {json_data.get('msg')}")
                 await a.edit_text("❌ Streamtape API'den Yükleme URL'si alınamadı! Detaylı Hata terminalde.")
                 return False
@@ -224,9 +225,11 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             data = aiohttp.FormData()
             filename = Path(path_to_file).name.replace("_", " ") 
             
+            file_reader = ProgressFile(path_to_file, a, file_size)
+
             data.add_field(
                 'file1',
-                ProgressFile(path_to_file, a, file_size),
+                file_reader, 
                 filename=filename,
                 content_type='application/octet-stream'
             )
@@ -245,7 +248,6 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             
             if int(status) != 200 or not download_link:
                 error_msg = data_f.get("msg", "Bilinmeyen API Hatası.")
-                # Yükleme hatası terminale yazılır
                 print(f"❌ [Streamtape HATA] Dosya yüklenirken hata oluştu! HTTP: {upload_http_status} | API Durumu: {status} | Mesaj: {error_msg}")
                 await a.edit_text("❌ Dosya Streamtape'e yüklenirken hata oluştu! Detaylı Hata terminalde.")
                 return False
@@ -265,12 +267,14 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             return True
             
     except Exception as e:
-        # Beklenmedik hata terminale yazılır
         print(f"❌ [Streamtape KRİTİK HATA] Yükleme Sırasında Beklenmedik Hata: {e}")
         await a.edit_text("❌ Streamtape Yükleme Sırasında Beklenmedik Hata oluştu! Detaylı Hata terminalde.")
         return False
         
     finally:
+        if file_reader:
+            file_reader.close()
+            
         if os.path.exists(path_to_file):
             try:
                 os.remove(path_to_file)
@@ -424,7 +428,6 @@ async def uz_command(client: Client, message: Message):
                             except Exception as e:
                                 await message.reply_text(f"⚠️ Orijinal dosya silinemedi: {e}")
                         else:
-                            # Hata mesajını terminale yönlendirdik. Telegram'a basit bir bilgilendirme gönderiyoruz.
                             await message.reply_text(f"❌ Streamtape yüklemesi başarısız oldu. Orijinal video dosyası sunucuda tutuluyor: {video_file_path.name}. API Hatası için terminali kontrol edin.")
                             
                     else:
