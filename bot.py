@@ -68,7 +68,7 @@ def humanbytes(size):
 async def progress_bar(current, total, message, start, prefix="İşlem"):
     """
     Telegram mesajını düzenleyerek bir ilerleme çubuğu gösterir.
-    NOT: parse_mode="markdownv2" kullanıldığı için tüm özel karakterler kaçırılmalıdır.
+    NOT: parse_mode="html" kullanıldığı için biçimlendirme HTML etiketleriyle yapılır.
     """
     now = time.time()
     diff = now - start
@@ -88,21 +88,20 @@ async def progress_bar(current, total, message, start, prefix="İşlem"):
         bar_length = 10
         filled_length = math.floor(percentage / 100 * bar_length)
         bar = '🟢' * filled_length + '⚪' * (bar_length - filled_length)
-        progress = f"\[{bar}\] {round(percentage, 2)}%" # Köşeli parantezler kaçırıldı
+        progress = f"[{bar}] {round(percentage, 2)}%" 
         
-        # Tüm başlıklar ve özel karakterler markdownv2'ye uygun kaçırıldı
+        # HTML biçimlendirme kullanıldı
         text = (
-            f"\*{prefix}\*\n\n"
+            f"<b>{prefix}</b>\n\n"
             f"{progress}\n"
-            f"\*Durum:\* {humanbytes(current)} / {humanbytes(total)}\n"
-            f"\*Hız:\* {humanbytes(speed)}/s\n"
-            f"\*Kalan Süre \(ETA\):\* {eta}s"
+            f"<b>Durum:</b> {humanbytes(current)} / {humanbytes(total)}\n"
+            f"<b>Hız:</b> {humanbytes(speed)}/s\n"
+            f"<b>Kalan Süre (ETA):</b> {eta}s"
         )
         
         try: 
-            await message.edit_text(text, parse_mode="markdownv2") 
+            await message.edit_text(text, parse_mode="html") 
         except Exception as e: 
-            # Hata oluşursa terminale yazdır, indirme çubuğu neden çalışmıyor görelim.
             print(f"Progress bar edit_text hatası: {e}")
             pass 
 
@@ -141,7 +140,7 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     """Seçilen ses akışını (tercihen Türkçe) video dosyasına gömer ve yeni bir dosya oluşturur."""
     
     if final_audio_index is None:
-        return None, "❌ HATA: Dosyada ses akışı bulunamadı\."
+        return None, "❌ HATA: Dosyada ses akışı bulunamadı."
         
     dir_name = os.path.dirname(path_to_file)
     filename = os.path.splitext(os.path.basename(path_to_file))[0]
@@ -157,12 +156,12 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     _, stderr = await process.communicate()
     
     if process.returncode != 0:
-        return None, f"❌ FFMPEG HATA: Ses kopyalama işlemi başarısız oldu\. Hata: `{stderr.decode('utf-8', errors='ignore')}`"
+        return None, f"❌ FFMPEG HATA: Ses kopyalama işlemi başarısız oldu. Hata: <code>{stderr.decode('utf-8', errors='ignore')}</code>"
     
     if is_turkish_present:
-        return str(output_path), f"✅ \*Türkçe Ses\* akışı kopyalanıp ayrı bir dosya oluşturuldu: `{output_path.name}`"
+        return str(output_path), f"✅ <b>Türkçe Ses</b> akışı kopyalanıp ayrı bir dosya oluşturuldu: <code>{output_path.name}</code>"
     else:
-        return str(output_path), f"⚠️ \*Türkçe Ses\* bulunamadı, mevcut herhangi bir akış \({final_audio_index}\) kopyalandı: `{output_path.name}`"
+        return str(output_path), f"⚠️ <b>Türkçe Ses</b> bulunamadı, mevcut herhangi bir akış ({final_audio_index}) kopyalandı: <code>{output_path.name}</code>"
 
 # --- STREAMTAPE YÜKLEME FONKSİYONU ---
 
@@ -173,10 +172,10 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
     
     # Yüklenecek dosyanın varlığını kontrol et
     if not os.path.exists(path_to_file):
-        await message.reply_text(f"❌ Yüklenecek dosya bulunamadı: `{Path(path_to_file).name}`")
+        await message.reply_text(f"❌ Yüklenecek dosya bulunamadı: <code>{Path(path_to_file).name}</code>", parse_mode="html")
         return
         
-    a = await message.reply_text("`Streamtape API'ye bağlanılıyor...`", quote=True) 
+    a = await message.reply_text("<code>Streamtape API'ye bağlanılıyor...</code>", quote=True, parse_mode="html") 
     file_size = os.path.getsize(path_to_file)
     
     # Asenkron okuma yaparak ilerlemeyi takip eden custom sınıf
@@ -200,6 +199,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                 self.uploaded += len(chunk)
                 
                 now = time.time()
+                # progress_bar artık parse_mode="html" kullanıyor.
                 if now - self.last_update >= 5 or self.uploaded == self.total:
                     try:
                         await progress_bar(
@@ -226,7 +226,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             # 1. Yükleme URL'sini al
             Main_API = "https://api.streamtape.com/file/ul?login={}&key={}"
             
-            await a.edit_text("`Streamtape: Yükleme URL'si talep ediliyor...`")
+            await a.edit_text("<code>Streamtape: Yükleme URL'si talep ediliyor...</code>", parse_mode="html")
             hit_api = await session.get(Main_API.format(Config.STREAMTAPE_API_USERNAME, Config.STREAMTAPE_API_PASS))
             
             http_status = hit_api.status
@@ -234,14 +234,14 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             
             if json_data.get("status") != 200:
                 await a.edit_text(
-                    f"❌ Streamtape API'den Yükleme URL'si alınamadı\!\\n"
-                    f"HTTP Durumu: `{http_status}` \| API Durumu: `{json_data.get('status')}`",
-                    parse_mode="markdownv2"
+                    f"❌ Streamtape API'den Yükleme URL'si alınamadı!\n"
+                    f"HTTP Durumu: <code>{http_status}</code> | API Durumu: <code>{json_data.get('status')}</code>",
+                    parse_mode="html"
                 )
                 return
 
             temp_api = json_data["result"]["url"]
-            await a.edit_text(f"`Yükleme URL'si alındı (HTTP {http_status})\. Yükleme başlıyor...`", parse_mode="markdownv2")
+            await a.edit_text(f"<code>Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...</code>", parse_mode="html")
             
             # 2. Dosyayı Yükle
             data = aiohttp.FormData()
@@ -267,20 +267,20 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             download_link = data_f.get("result", {}).get("url")
             
             if int(status) != 200 or not download_link:
-                error_msg = data_f.get("msg", "Bilinmeyen API Hatası\.")
+                error_msg = data_f.get("msg", "Bilinmeyen API Hatası.")
                 await a.edit_text(
-                    f"❌ Dosya Streamtape'e yüklenirken hata oluştu\!\\n"
-                    f"HTTP Durumu: `{upload_http_status}`\\nAPI Durumu: `{status}`\\nMesaj: `{error_msg}`",
-                    parse_mode="markdownv2"
+                    f"❌ Dosya Streamtape'e yüklenirken hata oluştu!\n"
+                    f"HTTP Durumu: <code>{upload_http_status}</code>\nAPI Durumu: <code>{status}</code>\nMesaj: <code>{error_msg}</code>",
+                    parse_mode="html"
                 )
                 return
 
             # 3. Başarılı Sonuçları İşle
             success = True
             await message.reply_text(
-                f"\*\*Yükleme Başarılı\!\*\* \(HTTP `{upload_http_status}`, API `{status}`\)\\n"
-                f"\*\*Dosya Adı:\*\* `{filename}`\n\n\*\*İndirme Linki:\*\* `{download_link}`",
-                parse_mode="markdownv2",
+                f"<b>Yükleme Başarılı!</b> (HTTP <code>{upload_http_status}</code>, API <code>{status}</code>)\n"
+                f"<b>Dosya Adı:</b> <code>{filename}</code>\n\n<b>İndirme Linki:</b> <a href='{download_link}'>{download_link}</a>",
+                parse_mode="html",
                 disable_web_page_preview=True,
                 reply_markup=InlineKeyboardMarkup(
                     [
@@ -291,7 +291,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             )
             
     except Exception as e:
-        await a.edit_text(f"❌ Streamtape Yükleme Sırasında Beklenmedik Hata: `{e}`")
+        await a.edit_text(f"❌ Streamtape Yükleme Sırasında Beklenmedik Hata: <code>{e}</code>", parse_mode="html")
         
     finally:
         # Son dosyayı (-TR.mp4) yükleme başarısız olsa bile sil
@@ -299,9 +299,9 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             try:
                 os.remove(path_to_file)
                 if success:
-                    await message.reply_text(f"🗑️ Yükleme sonrası son dosya silindi: `{Path(path_to_file).name}`")
+                    await message.reply_text(f"🗑️ Yükleme sonrası son dosya silindi: <code>{Path(path_to_file).name}</code>", parse_mode="html")
             except Exception as e:
-                 await message.reply_text(f"⚠️ Son dosya silinemedi: {e}")
+                 await message.reply_text(f"⚠️ Son dosya silinemedi: {e}", parse_mode="html")
                  
         await a.delete() # 'Yükleniyor' mesajını sil
 
@@ -313,42 +313,41 @@ async def handle_document(client: Client, message: Message):
     file_name = message.document.file_name
     
     if file_name and ".zip.00" in file_name:
-        status_message = await message.reply_text(f"`{file_name}`: İndiriliyor... Lütfen bekleyin.")
+        status_message = await message.reply_text(f"<code>{file_name}</code>: İndiriliyor... Lütfen bekleyin.", parse_mode="html")
         start_time = time.time()
         
         try:
             download_path = await message.download(
                 file_name=os.path.join(DOWNLOAD_DIR, file_name),
                 progress=progress_bar, 
-                # Prefix'teki özel karakterler markdownv2'ye uygun kaçırıldı
-                progress_args=(status_message, start_time, f"\*{Path(file_name).name}\* İndiriliyor")
+                # Prefix HTML'e uygun düzenlendi
+                progress_args=(status_message, start_time, f"<b>{Path(file_name).name}</b> İndiriliyor")
             )
             
-            # Mesaj sonu da markdownv2'ye uygun hale getirildi
             await status_message.edit_text(
-                f"✅ Parça başarıyla indirildi: `{Path(download_path).name}`\n"
-                f"Tüm parçaları gönderdikten sonra \*\*`/uz`\*\* komutunu kullanın\.",
-                parse_mode="markdownv2"
+                f"✅ Parça başarıyla indirildi: <code>{Path(download_path).name}</code>\n"
+                f"Tüm parçaları gönderdikten sonra <b>/uz</b> komutunu kullanın.",
+                parse_mode="html"
             )
         except Exception as e:
-            await status_message.edit_text(f"❌ İndirme sırasında bir hata oluştu: {e}")
+            await status_message.edit_text(f"❌ İndirme sırasında bir hata oluştu: {e}", parse_mode="html")
             
     else:
-        await message.reply_text("Bu dosya bir parçalı ZIP \(\.zip\.00x\) dosyası gibi görünmüyor\.", parse_mode="markdownv2")
+        await message.reply_text("Bu dosya bir parçalı ZIP (<code>.zip.00x</code>) dosyası gibi görünmüyor.", parse_mode="html")
 
 
 @app.on_message(filters.command("uz") & filters.private)
 async def uz_command(client: Client, message: Message):
     """/uz komutu ile çıkarma işlemini tetikler, ses işler ve Streamtape'e yükler."""
-    await message.reply_text("🔍 ZIP çıkarma işlemi başlatılıyor\.", parse_mode="markdownv2")
+    await message.reply_text("🔍 ZIP çıkarma işlemi başlatılıyor.", parse_mode="html")
 
     first_part_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.zip.001"))
     
     if not first_part_files:
-        await message.reply_text("❌ HATA: \`\.zip\.001\` dosyası bulunamadı\.", parse_mode="markdownv2")
+        await message.reply_text("❌ HATA: <code>.zip.001</code> dosyası bulunamadı.", parse_mode="html")
         return
 
-    await message.reply_text(f"Toplam \*\*\{len(first_part_files)}\*\* adet dosya albümü bulundu\. İşlem başlıyor\.", parse_mode="markdownv2")
+    await message.reply_text(f"Toplam <b>{len(first_part_files)}</b> adet dosya albümü bulundu. İşlem başlıyor.", parse_mode="html")
 
     for first_part_path in first_part_files:
         first_part_filename = Path(first_part_path).name
@@ -356,7 +355,7 @@ async def uz_command(client: Client, message: Message):
         final_output_path_base = UNZIP_PATH / base_name
         final_output_path_base.mkdir(parents=True, exist_ok=True)
         
-        status_msg = await message.reply_text(f"\n\-\-\- \*\*\{base_name}\*\* albümü için çıkarma başlatılıyor\. \-\-\-", parse_mode="markdownv2")
+        status_msg = await message.reply_text(f"\n--- <b>{base_name}</b> albümü için çıkarma başlatılıyor. ---", parse_mode="html")
         
         # 7z komutu
         command = [
@@ -403,8 +402,8 @@ async def uz_command(client: Client, message: Message):
             print("DETAYLI LOG BAŞLANGIÇ:\n" + log_content)
             print("="*50 + "\n")
             
-            # Telegram'a sadece basit bir başarı mesajı gönder (markdownv2 ile)
-            await status_msg.edit_text(f"✅ \*\*\{base_name}\*\* ZIP çıkarma işlemi tamamlandı\! Detaylı log sunucuda \(terminal\)\.", parse_mode="markdownv2")
+            # Telegram'a sadece basit bir başarı mesajı gönder (HTML ile)
+            await status_msg.edit_text(f"✅ <b>{base_name}</b> ZIP çıkarma işlemi tamamlandı! Detaylı log sunucuda (terminal).", parse_mode="html")
 
 
             # --- ZIP SİLME İŞLEMİ (Temizlik) ---
@@ -412,15 +411,15 @@ async def uz_command(client: Client, message: Message):
                 base_zip_name = first_part_filename.replace(".001", "")
                 for part_file in glob.glob(os.path.join(DOWNLOAD_DIR, f"{base_zip_name}*")):
                     os.remove(part_file)
-                await message.reply_text(f"🗑️ `{base_name}` albümüne ait tüm ZIP parçaları sunucudan silindi.")
+                await message.reply_text(f"🗑️ <code>{base_name}</code> albümüne ait tüm ZIP parçaları sunucudan silindi.", parse_mode="html")
             except Exception as e:
-                await message.reply_text(f"⚠️ Parçalar silinirken hata oluştu: {e}")
+                await message.reply_text(f"⚠️ Parçalar silinirken hata oluştu: {e}", parse_mode="html")
 
             # --- KRİTİK KONTROL: Klasör Boş Mu? ---
             if not any(final_output_path_base.iterdir()):
                 await message.reply_text(
-                    f"❌ KRİTİK HATA: `{final_output_path_base.name}` klasörü \*\*boş\*\* çıktı\. Video arama atlanıyor\.",
-                    parse_mode="markdownv2"
+                    f"❌ KRİTİK HATA: <code>{final_output_path_base.name}</code> klasörü <b>boş</b> çıktı. Video arama atlanıyor.",
+                    parse_mode="html"
                 )
                 continue 
             
@@ -433,8 +432,8 @@ async def uz_command(client: Client, message: Message):
             
             if not video_files:
                 await message.reply_text(
-                    f"⚠️ `{final_output_path_base.name}` klasörünün alt klasörlerinde video dosyası bulunamadı\. Yükleme atlandı\.",
-                    parse_mode="markdownv2"
+                    f"⚠️ <code>{final_output_path_base.name}</code> klasörünün alt klasörlerinde video dosyası bulunamadı. Yükleme atlandı.",
+                    parse_mode="html"
                 )
             
             # Bulunan her video dosyasını işler
@@ -442,37 +441,37 @@ async def uz_command(client: Client, message: Message):
                 video_file_path = Path(video_file)
                 
                 # Hata Ayıklama Adımı 1: Ses Analizi Başlangıcı
-                await message.reply_text(f"🎵 Video bulundu: `{video_file_path.name}`\. Ses akışı analiz ediliyor\.", parse_mode="markdownv2")
+                await message.reply_text(f"🎵 Video bulundu: <code>{video_file_path.name}</code>. Ses akışı analiz ediliyor.", parse_mode="html")
                 
                 final_audio_index, is_turkish_present = await get_audio_stream_info(str(video_file_path))
                 
                 if final_audio_index is not None:
                     
                     # Hata Ayıklama Adımı 2: Ses İşleme Başlangıcı
-                    await message.reply_text(f"🔊 Ses akışı \(Index {final_audio_index}\) ile FFMPEG işlemi başlatılıyor\.", parse_mode="markdownv2")
+                    await message.reply_text(f"🔊 Ses akışı (Index {final_audio_index}) ile FFMPEG işlemi başlatılıyor.", parse_mode="html")
                     
                     # new_file_path burada -TR.mp4 dosyasının yolunu alır
                     new_file_path, result_msg = await process_audio_only(str(video_file_path), final_audio_index, is_turkish_present)
-                    await message.reply_text(result_msg, parse_mode="markdownv2")
+                    await message.reply_text(result_msg, parse_mode="html")
                     
                     # --- Hata Ayıklama Adımı 3: Streamtape Kontrolü (KRİTİK BÖLGE) ---
                     if new_file_path and os.path.exists(new_file_path):
-                        await message.reply_text("✅ FFMPEG başarılı ve dosya \(`\-TR\.mp4`\) bulundu\! Streamtape yüklemesi çağrılıyor\.", parse_mode="markdownv2")
+                        await message.reply_text("✅ FFMPEG başarılı ve dosya (<code>-TR.mp4</code>) bulundu! Streamtape yüklemesi çağrılıyor.", parse_mode="html")
                         # Streamtape yüklemesini çağır ve await ile bitmesini bekle
                         await upload_to_streamtape(client, message, new_file_path) 
                     else:
                         # new_file_path None döndüyse veya dosya oluşmadıysa (FFMPEG hatası)
-                        await message.reply_text("❌ FFMPEG işlemi başarısız oldu veya \`\-TR\.mp4\` dosyası oluşmadı\. Streamtape yüklemesi atlanıyor\.", parse_mode="markdownv2")
+                        await message.reply_text("❌ FFMPEG işlemi başarısız oldu veya <code>-TR.mp4</code> dosyası oluşmadı. Streamtape yüklemesi atlanıyor.", parse_mode="html")
                         
                     # Yükleme sonrası Orijinal video dosyasını sil
                     try: 
                         os.remove(video_file_path)
-                        await message.reply_text(f"🗑️ Orijinal video dosyası silindi: `{video_file_path.name}`")
+                        await message.reply_text(f"🗑️ Orijinal video dosyası silindi: <code>{video_file_path.name}</code>", parse_mode="html")
                     except Exception: 
                         pass
                         
                 else:
-                    await message.reply_text("❌ Ses akışı bilgisi alınamadı, FFMPEG/Streamtape işlemi atlanıyor\.", parse_mode="markdownv2")
+                    await message.reply_text("❌ Ses akışı bilgisi alınamadı, FFMPEG/Streamtape işlemi atlanıyor.", parse_mode="html")
 
         except subprocess.CalledProcessError as e:
             # Hata oluştuğunda Terminal'e logu yazdır ve Telegram'a basit mesaj gönder
@@ -484,13 +483,13 @@ async def uz_command(client: Client, message: Message):
             print("DETAYLI HATA LOGU BAŞLANGIÇ:\n" + error_message)
             print("#"*50 + "\n")
             
-            # Telegram'a sadece basit bir hata mesajı gönder (markdownv2 ile)
-            await status_msg.edit_text(f"❌ HATA: \*\*\{base_name}\*\* çıkarma işlemi başarısız oldu\! Hata Kodu: {e.returncode}\. Detaylı log sunucuda \(terminal\)\.", parse_mode="markdownv2")
+            # Telegram'a sadece basit bir hata mesajı gönder (HTML ile)
+            await status_msg.edit_text(f"❌ HATA: <b>{base_name}</b> çıkarma işlemi başarısız oldu! Hata Kodu: {e.returncode}. Detaylı log sunucuda (terminal).", parse_mode="html")
 
         except FileNotFoundError as e:
-            await message.reply_text(f"❌ KRİTİK HATA: {e} komutu bulunamadı\. Lütfen 7z/ffmpeg kurun\.", parse_mode="markdownv2")
+            await message.reply_text(f"❌ KRİTİK HATA: {e} komutu bulunamadı. Lütfen 7z/ffmpeg kurun.", parse_mode="html")
 
-    await message.reply_text("\n🎉 Tüm işlemler tamamlandı\.", parse_mode="markdownv2")
+    await message.reply_text("\n🎉 Tüm işlemler tamamlandı.", parse_mode="html")
 
 # --- CALLBACK QUERY HANDLER ---
 
@@ -514,14 +513,15 @@ async def callback_handler(client: Client, cb):
             status = json_data.get('msg', json_data.get('status'))
             
             if status == "OK" or status == 200:
-                await cb.message.edit_text(f"✅ Dosya başarıyla Silindi: `{token}`")
+                await cb.message.edit_text(f"✅ Dosya başarıyla Silindi: <code>{token}</code>", parse_mode="html")
                 await client.send_message(
                     chat_id=cb.message.chat.id,
-                    text=f"\#STREAMTAPE\_DELETE:\n\n\[{cb.from_user.first_name}\]\(tg://user?id={cb.from_user.id}\) Deleted `{download_link}`",
-                    parse_mode="markdownv2", disable_web_page_preview=True 
+                    # Link ve kullanıcı adını HTML formatında biçimlendirildi
+                    text=f"#STREAMTAPE_DELETE:\n\n<a href='tg://user?id={cb.from_user.id}'>{cb.from_user.first_name}</a> Deleted <code>{download_link}</code>",
+                    parse_mode="html", disable_web_page_preview=True 
                 )
             else:
-                await cb.message.edit_text(f"❌ Dosya Silinemedi! Durum: {status}")
+                await cb.message.edit_text(f"❌ Dosya Silinemedi! Durum: {status}", parse_mode="html")
 
     elif cb.data == "close": 
         await cb.message.delete()  
@@ -533,11 +533,11 @@ async def callback_handler(client: Client, cb):
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client: Client, message: Message):
     await message.reply_text(
-        "Merhaba\! Ben Pyrogram ZIP Birleştirme Botuyum\.\\n"
-        "1\. Lütfen sırayla parçalı ZIP dosyalarını \(örn: \`\.zip\.001\`, \`\.zip\.002\`\.\.\.\) gönderin\.\\n"
-        "2\. \*\*Tüm parçaları gönderdikten sonra\*\* sadece \*\*`/uz`\*\* komutunu kullanın\.\\n"
-        "Bot, ZIP'leri açacak, çıkan videolardaki Türkçe sesi bulup \*\*Streamtape'e yükleyecektir\*\*\\.",
-        parse_mode="markdownv2"
+        "Merhaba! Ben Pyrogram ZIP Birleştirme Botuyum.\n"
+        "1. Lütfen sırayla parçalı ZIP dosyalarını (örn: <code>.zip.001</code>, <code>.zip.002</code>...) gönderin.\n"
+        "2. <b>Tüm parçaları gönderdikten sonra</b> sadece <b>/uz</b> komutunu kullanın.\n"
+        "Bot, ZIP'leri açacak, çıkan videolardaki Türkçe sesi bulup <b>Streamtape'e yükleyecektir</b>.",
+        parse_mode="html"
     )
 
 # Botu çalıştır
