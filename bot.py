@@ -10,7 +10,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 
-# Yeni gereksinim
+# Gerekli kütüphane: pip install aiohttp
 import aiohttp 
 
 # .env dosyasından ortam değişkenlerini yükle
@@ -23,7 +23,7 @@ try:
     API_HASH = os.getenv("API_HASH")
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     
-    # Streamtape API Bilgileri (ENV'den okunduğu varsayılır)
+    # Streamtape API Bilgileri
     class Config:
         STREAMTAPE_API_USERNAME = os.getenv("STREAMTAPE_API_USERNAME")
         STREAMTAPE_API_PASS = os.getenv("STREAMTAPE_API_PASS")
@@ -72,7 +72,6 @@ async def progress_bar(current, total, message, start, prefix="İşlem"):
     now = time.time()
     diff = now - start
     
-    # Her 5 saniyede bir veya işlem bittiğinde mesajı güncelle
     if round(diff % 5) == 0 or current == total:
         if diff == 0: diff = 1 
         
@@ -92,14 +91,15 @@ async def progress_bar(current, total, message, start, prefix="İşlem"):
         text = f"**{prefix}**\n\n{progress}\n**Durum:** {humanbytes(current)} / {humanbytes(total)}\n**Hız:** {humanbytes(speed)}/s\n**Kalan Süre (ETA):** {eta}s"
         
         try: 
+            # Pyrogram'da mesajı düzenlerken "parse_mode" belirtilmemesi, varsayılanı kullanır
             await message.edit_text(text)
         except Exception: 
             pass 
 
-# --- FFPROBE ve FFMPEG Fonksiyonları (Değişmedi) ---
+# --- FFPROBE ve FFMPEG Fonksiyonları ---
 
 async def get_audio_stream_info(path_to_file):
-    # ... (get_audio_stream_info kod içeriği buraya kopyalanır) ...
+    """Video dosyasındaki ses akışlarını analiz eder ve Türkçe sesin index'ini bulur."""
     cmd_probe = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", path_to_file]
     
     process = await asyncio.create_subprocess_exec(*cmd_probe, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -116,7 +116,6 @@ async def get_audio_stream_info(path_to_file):
     
     for stream in audio_streams:
         if any_stream_index is None: any_stream_index = stream["index"]
-            
         lang = stream.get("tags", {}).get("language", "").lower()
         title = stream.get("tags", {}).get("title", "").lower()
         
@@ -129,7 +128,8 @@ async def get_audio_stream_info(path_to_file):
 
 
 async def process_audio_only(path_to_file, final_audio_index, is_turkish_present):
-    # ... (process_audio_only kod içeriği buraya kopyalanır) ...
+    """Seçilen ses akışını (tercihen Türkçe) video dosyasına gömer ve yeni bir dosya oluşturur."""
+    
     if final_audio_index is None:
         return None, "❌ HATA: Dosyada ses akışı bulunamadı."
         
@@ -154,20 +154,18 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     else:
         return str(output_path), f"⚠️ **Türkçe Ses** bulunamadı, mevcut herhangi bir akış ({final_audio_index}) kopyalandı: `{output_path.name}`"
 
-# --- STREAMTAPE YÜKLEME FONKSİYONU (GÜNCELLENDİ) ---
+# --- STREAMTAPE YÜKLEME FONKSİYONU (GÜNCELLENMİŞ) ---
 
 async def upload_to_streamtape(client: Client, message: Message, path_to_file: str):
     """
     İşlenmiş dosyayı Streamtape'e yükler ve ilerleme çubuğu gösterir.
     """
     
-    # Yükleniyor mesajı (a) oluşturuluyor
     a = await message.reply_text("`Streamtape API'ye bağlanılıyor...`", quote=True) 
     file_size = os.path.getsize(path_to_file)
     
     # Asenkron okuma yaparak ilerlemeyi takip eden custom sınıf
     class ProgressFile(object):
-        """Dosyayı okurken ilerlemeyi güncelleyen custom reader"""
         def __init__(self, file_path, status_message, total_size):
             self.file_path = file_path
             self.file = open(file_path, 'rb')
@@ -181,13 +179,11 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             return self.total
 
         async def read(self, size):
-            # Dosya okuma işlemini bloke etmemesi için ayrı bir iş parçacığında çalıştır
             chunk = await asyncio.to_thread(self.file.read, size)
             if chunk:
                 self.uploaded += len(chunk)
                 
                 now = time.time()
-                # Her 5 saniyede bir veya bitince ilerlemeyi güncelle
                 if now - self.last_update >= 5 or self.uploaded == self.total:
                     try:
                         await progress_bar(
@@ -198,7 +194,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                             prefix="🚀 Streamtape'e Yükleniyor"
                         )
                     except Exception:
-                        pass # İlerleme çubuğu hatasını yoksay
+                        pass
                     self.last_update = now
                     
             return chunk
@@ -215,7 +211,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             hit_api = await session.get(Main_API.format(Config.STREAMTAPE_API_USERNAME, Config.STREAMTAPE_API_PASS))
             json_data = await hit_api.json()
             
-            if json_data["status"] != 200:
+            if json_data.get("status") != 200:
                 await a.edit_text("❌ Streamtape API'den Yükleme URL'si alınamadı.")
                 return
 
@@ -224,14 +220,13 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             
             # 2. Dosyayı Yükle (ProgressFile ile)
             
-            # aiohttp.FormData ile multipart/form-data oluşturma
             data = aiohttp.FormData()
+            filename = Path(path_to_file).name.replace("_", " ") 
             
-            # ProgressFile'ı kullanarak 'file1' alanını ekle
             data.add_field(
                 'file1',
                 ProgressFile(path_to_file, a, file_size),
-                filename=Path(path_to_file).name,
+                filename=filename,
                 content_type='application/octet-stream'
             )
             
@@ -240,7 +235,6 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             
             status = data_f.get("status")
             download_link = data_f.get("result", {}).get("url")
-            filename = Path(path_to_file).name.replace("_", " ") 
             
             if int(status) != 200 or not download_link:
                 error_msg = data_f.get("msg", "Bilinmeyen API Hatası.")
@@ -258,7 +252,6 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                 reply_markup=InlineKeyboardMarkup(
                     [
                         [InlineKeyboardButton("Link'i Aç", url=download_link)],
-                        # Silme callback'ine linki ekliyoruz
                         [InlineKeyboardButton("Dosyayı Sil", callback_data=f"deletestream_{download_link}")] 
                     ]
                 )
@@ -268,12 +261,6 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
         await a.edit_text(f"❌ Streamtape Yükleme Sırasında Beklenmedik Hata: `{e}`")
         
     finally:
-        # Sunucudaki yüklü dosyayı sil (Başarılı veya başarısız olsun)
-        try:
-            os.remove(path_to_file)
-        except:
-            pass
-        
         # 'Yükleniyor' mesajını sil
         await a.delete()
 
@@ -281,7 +268,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
 
 @app.on_message(filters.document & filters.private)
 async def handle_document(client: Client, message: Message):
-    # ... (handle_document kısmı değişmedi) ...
+    """Kullanıcıdan gelen parçalı ZIP dosyalarını indirir."""
     file_name = message.document.file_name
     
     if file_name and ".zip.00" in file_name:
@@ -308,9 +295,7 @@ async def handle_document(client: Client, message: Message):
 
 @app.on_message(filters.command("uz") & filters.private)
 async def uz_command(client: Client, message: Message):
-    """
-    /uz komutu ile çıkarma işlemini tetikler, ses işler ve Streamtape'e yükler.
-    """
+    """/uz komutu ile çıkarma işlemini tetikler, ses işler ve Streamtape'e yükler."""
     await message.reply_text("🔍 ZIP çıkarma işlemi başlatılıyor...")
 
     first_part_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.zip.001"))
@@ -319,7 +304,8 @@ async def uz_command(client: Client, message: Message):
         await message.reply_text("❌ HATA: `.zip.001` dosyası bulunamadı.")
         return
 
-    # ... (Geri kalan ZIP çıkarma ve ses işleme mantığı) ...
+    await message.reply_text(f"Toplam **{len(first_part_files)}** adet dosya albümü bulundu. İşlem başlıyor...")
+
     for first_part_path in first_part_files:
         first_part_filename = Path(first_part_path).name
         base_name = first_part_filename.replace(".zip.001", "").replace(".zip", "")
@@ -333,40 +319,49 @@ async def uz_command(client: Client, message: Message):
         ]
         
         try:
+            # ZIP çıkarma işlemi
             await asyncio.to_thread(
                 subprocess.run, command, cwd=DOWNLOAD_DIR, capture_output=True, text=True, check=True
             )
             await status_msg.edit_text(f"✅ **{base_name}** ZIP çıkarma işlemi tamamlandı!")
             
-            # --- SES İŞLEME KISMI ---
+            # --- SES İŞLEME VE YÜKLEME KISMI (GÜNCELLENMİŞ VİDEO ARAMA) ---
+            
             video_files = []
             for ext in ["*.mkv", "*.mp4", "*.avi", "*.mov"]:
-                video_files.extend(glob.glob(str(final_output_path_base / ext), recursive=False))
+                 # KRİTİK DÜZELTME: Recursive=True ile tüm alt klasörler taranıyor
+                video_files.extend(glob.glob(str(final_output_path_base / "**" / ext), recursive=True))
             
-            if len(video_files) == 1:
-                video_file = video_files[0]
-                await message.reply_text(f"🎵 Ses akışı analiz ediliyor...")
+            if not video_files:
+                await message.reply_text("⚠️ Klasörde video dosyası bulunamadı. Yükleme atlandı.")
+            
+            # Bulunan her video dosyasını işler
+            for video_file in video_files:
+                video_file_path = Path(video_file)
+                await message.reply_text(f"🎵 Video bulundu: `{video_file_path.name}`. Ses akışı analiz ediliyor...")
                 
-                final_audio_index, is_turkish_present = await get_audio_stream_info(video_file)
+                final_audio_index, is_turkish_present = await get_audio_stream_info(str(video_file_path))
                 
                 if final_audio_index is not None:
-                    new_file_path, result_msg = await process_audio_only(video_file, final_audio_index, is_turkish_present)
+                    # Ses işleme (yeni dosyanın yolunu alır)
+                    new_file_path, result_msg = await process_audio_only(str(video_file_path), final_audio_index, is_turkish_present)
                     await message.reply_text(result_msg)
                     
-                    # --- YÜKLEME KISMI ---
+                    # --- STREAMTAPE YÜKLEME ---
                     if new_file_path:
                         await upload_to_streamtape(client, message, new_file_path)
-                    
-                    # Orijinal video dosyasını sil
-                    try: os.remove(video_file)
-                    except: pass
+                        
+                    # Yükleme başarılı olsa bile orijinal video dosyasını sil
+                    try: 
+                        os.remove(video_file_path)
+                        await message.reply_text(f"🗑️ Orijinal video dosyası silindi: `{video_file_path.name}`")
+                    except: 
+                        pass
                         
                 else:
                     await message.reply_text("❌ Ses akışı bilgisi alınamadı, işlem atlanıyor.")
-            else:
-                 await message.reply_text("⚠️ Klasörde birden fazla veya hiç video dosyası bulunamadı. Yükleme atlandı.")
             
-            # --- ZİP SİLME İŞLEMİ ---
+            # --- ZIP SİLME İŞLEMİ ---
             try:
                 base_zip_name = first_part_filename.replace(".001", "")
                 for part_file in glob.glob(os.path.join(DOWNLOAD_DIR, f"{base_zip_name}*")):
@@ -385,19 +380,17 @@ async def uz_command(client: Client, message: Message):
 
     await message.reply_text("\n🎉 Tüm işlemler tamamlandı.")
 
-# --- CALLBACK QUERY HANDLER (Değişmedi) ---
+# --- CALLBACK QUERY HANDLER ---
 
 @app.on_callback_query()
 async def callback_handler(client: Client, cb):
-    """
-    Streamtape silme callback'ini işler.
-    """
+    """Streamtape silme callback'ini işler."""
+    
     if cb.data.startswith("deletestream_"):
         await cb.answer("Silme işlemi başlatılıyor...")
         
         download_link = cb.data.split("deletestream_", 1)[1] 
-        # Streamtape linki http://stape.fun/v/TOKEN gibi varsayıldı
-        token = download_link.split("/v/", 1)[-1].split("?", 1)[0] 
+        token = download_link.split("/v/", 1)[-1].split("?", 1)[0]
         
         async with aiohttp.ClientSession() as session:
             del_api = "https://api.streamtape.com/file/delete?login={}&key={}&file={}"
@@ -437,4 +430,3 @@ async def start_command(client: Client, message: Message):
 if __name__ == "__main__":
     print(f"Bot Başlatılıyor... İndirme Dizini: {DOWNLOAD_DIR}")
     app.run()
-                    
