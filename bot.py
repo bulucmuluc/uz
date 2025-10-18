@@ -91,7 +91,6 @@ async def progress_bar(current, total, message, start, prefix="İşlem"):
         text = f"**{prefix}**\n\n{progress}\n**Durum:** {humanbytes(current)} / {humanbytes(total)}\n**Hız:** {humanbytes(speed)}/s\n**Kalan Süre (ETA):** {eta}s"
         
         try: 
-            # Pyrogram'da mesajı düzenlerken "parse_mode" belirtilmemesi, varsayılanı kullanır
             await message.edit_text(text)
         except Exception: 
             pass 
@@ -154,7 +153,7 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     else:
         return str(output_path), f"⚠️ **Türkçe Ses** bulunamadı, mevcut herhangi bir akış ({final_audio_index}) kopyalandı: `{output_path.name}`"
 
-# --- STREAMTAPE YÜKLEME FONKSİYONU (GÜNCELLENMİŞ) ---
+# --- STREAMTAPE YÜKLEME FONKSİYONU ---
 
 async def upload_to_streamtape(client: Client, message: Message, path_to_file: str):
     """
@@ -166,6 +165,7 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
     
     # Asenkron okuma yaparak ilerlemeyi takip eden custom sınıf
     class ProgressFile(object):
+        """Dosyayı okurken ilerlemeyi güncelleyen custom reader"""
         def __init__(self, file_path, status_message, total_size):
             self.file_path = file_path
             self.file = open(file_path, 'rb')
@@ -314,26 +314,48 @@ async def uz_command(client: Client, message: Message):
         
         status_msg = await message.reply_text(f"\n--- **{base_name}** albümü için çıkarma başlatılıyor. ---")
         
+        # 7z komutuna dosyanın tam yolu veriliyor ve cwd=None ayarlanıyor
         command = [
-            "7z", "e", Path(first_part_path).name, f"-o{final_output_path_base}", "-y"
+            "7z", 
+            "e", 
+            str(Path(DOWNLOAD_DIR) / first_part_filename), # Tam dosya yolu
+            f"-o{final_output_path_base}", 
+            "-y"
         ]
         
         try:
             # ZIP çıkarma işlemi
             await asyncio.to_thread(
-                subprocess.run, command, cwd=DOWNLOAD_DIR, capture_output=True, text=True, check=True
+                subprocess.run, 
+                command, 
+                cwd=None, # Tam yolu kullandığımız için cwd'ye gerek yok
+                capture_output=True, 
+                text=True, 
+                check=True
             )
             await status_msg.edit_text(f"✅ **{base_name}** ZIP çıkarma işlemi tamamlandı!")
             
-            # --- SES İŞLEME VE YÜKLEME KISMI (GÜNCELLENMİŞ VİDEO ARAMA) ---
+            # --- KRİTİK KONTROL: Klasör Boş Mu? ---
+            
+            if not any(final_output_path_base.iterdir()):
+                await message.reply_text(
+                    f"❌ KRİTİK HATA: ZIP çıkarma başarılı göründü, ancak `{final_output_path_base.name}` klasörü **boş**.\n"
+                    "Lütfen parçaların tam ve bozuk olmadığından emin olun."
+                )
+                continue # Bir sonraki dosyaya geç
+            
+            # --- SES İŞLEME VE YÜKLEME KISMI ---
             
             video_files = []
             for ext in ["*.mkv", "*.mp4", "*.avi", "*.mov"]:
-                 # KRİTİK DÜZELTME: Recursive=True ile tüm alt klasörler taranıyor
+                # Recursive=True ile tüm alt dizinler taranıyor
                 video_files.extend(glob.glob(str(final_output_path_base / "**" / ext), recursive=True))
             
             if not video_files:
-                await message.reply_text("⚠️ Klasörde video dosyası bulunamadı. Yükleme atlandı.")
+                # Sizin aldığınız hata burada yakalanır, artık boş klasör kontrolünden sonra çalışır
+                await message.reply_text(
+                    f"⚠️ `{final_output_path_base.name}` klasörünün alt klasörlerinde video dosyası bulunamadı. Yükleme atlandı."
+                )
             
             # Bulunan her video dosyasını işler
             for video_file in video_files:
@@ -343,7 +365,7 @@ async def uz_command(client: Client, message: Message):
                 final_audio_index, is_turkish_present = await get_audio_stream_info(str(video_file_path))
                 
                 if final_audio_index is not None:
-                    # Ses işleme (yeni dosyanın yolunu alır)
+                    # Ses işleme
                     new_file_path, result_msg = await process_audio_only(str(video_file_path), final_audio_index, is_turkish_present)
                     await message.reply_text(result_msg)
                     
@@ -355,7 +377,7 @@ async def uz_command(client: Client, message: Message):
                     try: 
                         os.remove(video_file_path)
                         await message.reply_text(f"🗑️ Orijinal video dosyası silindi: `{video_file_path.name}`")
-                    except: 
+                    except Exception: 
                         pass
                         
                 else:
