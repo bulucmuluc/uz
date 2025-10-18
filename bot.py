@@ -72,6 +72,7 @@ async def progress_bar(current, total, message, start, prefix="İşlem"):
     now = time.time()
     diff = now - start
     
+    # Her 5 saniyede bir veya işlem bittiğinde mesajı güncelle
     if round(diff % 5) == 0 or current == total:
         if diff == 0: diff = 1 
         
@@ -153,7 +154,7 @@ async def process_audio_only(path_to_file, final_audio_index, is_turkish_present
     else:
         return str(output_path), f"⚠️ **Türkçe Ses** bulunamadı, mevcut herhangi bir akış ({final_audio_index}) kopyalandı: `{output_path.name}`"
 
-# --- STREAMTAPE YÜKLEME FONKSİYONU ---
+# --- STREAMTAPE YÜKLEME FONKSİYONU (Status Logları Eklendi) ---
 
 async def upload_to_streamtape(client: Client, message: Message, path_to_file: str):
     """
@@ -163,9 +164,8 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
     a = await message.reply_text("`Streamtape API'ye bağlanılıyor...`", quote=True) 
     file_size = os.path.getsize(path_to_file)
     
-    # Asenkron okuma yaparak ilerlemeyi takip eden custom sınıf
+    # Asenkron okuma yaparak ilerlemeyi takip eden custom sınıf (ProgressFile)
     class ProgressFile(object):
-        """Dosyayı okurken ilerlemeyi güncelleyen custom reader"""
         def __init__(self, file_path, status_message, total_size):
             self.file_path = file_path
             self.file = open(file_path, 'rb')
@@ -202,24 +202,31 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
         def close(self):
             self.file.close()
 
-
+    success = False
+    
     try:
         async with aiohttp.ClientSession() as session:
             
             # 1. Yükleme URL'sini al
             Main_API = "https://api.streamtape.com/file/ul?login={}&key={}"
+            
+            await a.edit_text("`Streamtape: Yükleme URL'si talep ediliyor...`")
             hit_api = await session.get(Main_API.format(Config.STREAMTAPE_API_USERNAME, Config.STREAMTAPE_API_PASS))
+            
+            http_status = hit_api.status
             json_data = await hit_api.json()
             
             if json_data.get("status") != 200:
-                await a.edit_text("❌ Streamtape API'den Yükleme URL'si alınamadı.")
+                await a.edit_text(
+                    f"❌ Streamtape API'den Yükleme URL'si alınamadı!\n"
+                    f"HTTP Durumu: `{http_status}` | API Durumu: `{json_data.get('status')}`"
+                )
                 return
 
             temp_api = json_data["result"]["url"]
-            await a.edit_text("`Yükleme URL'si alındı. Yükleme başlıyor...`")
+            await a.edit_text(f"`Yükleme URL'si alındı (HTTP {http_status}). Yükleme başlıyor...`")
             
-            # 2. Dosyayı Yükle (ProgressFile ile)
-            
+            # 2. Dosyayı Yükle
             data = aiohttp.FormData()
             filename = Path(path_to_file).name.replace("_", " ") 
             
@@ -231,8 +238,15 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
             )
             
             response = await session.post(temp_api, data=data)
-            data_f = await response.json(content_type=None)
             
+            upload_http_status = response.status
+            
+            try:
+                data_f = await response.json(content_type=None)
+            except aiohttp.ContentTypeError:
+                # API JSON döndürmezse (nadiren 500 hatası gibi durumlarda)
+                data_f = {} 
+
             status = data_f.get("status")
             download_link = data_f.get("result", {}).get("url")
             
@@ -240,12 +254,14 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
                 error_msg = data_f.get("msg", "Bilinmeyen API Hatası.")
                 await a.edit_text(
                     f"❌ Dosya Streamtape'e yüklenirken hata oluştu!\n"
-                    f"API Durumu: `{status}`\nMesaj: `{error_msg}`"
+                    f"HTTP Durumu: `{upload_http_status}`\nAPI Durumu: `{status}`\nMesaj: `{error_msg}`"
                 )
                 return
 
             # 3. Başarılı Sonuçları İşle
+            success = True
             await message.reply_text(
+                f"**Yükleme Başarılı!** (HTTP `{upload_http_status}`, API `{status}`)\n"
                 f"**Dosya Adı:** `{filename}`\n\n**İndirme Linki:** `{download_link}`",
                 parse_mode="markdown",
                 disable_web_page_preview=True,
@@ -261,8 +277,16 @@ async def upload_to_streamtape(client: Client, message: Message, path_to_file: s
         await a.edit_text(f"❌ Streamtape Yükleme Sırasında Beklenmedik Hata: `{e}`")
         
     finally:
-        # 'Yükleniyor' mesajını sil
-        await a.delete()
+        # Son dosyayı (-TR.mp4) yükleme başarısız olsa bile sil
+        if os.path.exists(path_to_file):
+            try:
+                os.remove(path_to_file)
+                if success:
+                    await message.reply_text(f"🗑️ Yükleme sonrası son dosya silindi: `{Path(path_to_file).name}`")
+            except Exception as e:
+                 await message.reply_text(f"⚠️ Son dosya silinemedi: {e}")
+                 
+        await a.delete() # 'Yükleniyor' mesajını sil
 
 # --- PYROGRAM KOMUT İŞLEYİCİLERİ ---
 
@@ -314,35 +338,47 @@ async def uz_command(client: Client, message: Message):
         
         status_msg = await message.reply_text(f"\n--- **{base_name}** albümü için çıkarma başlatılıyor. ---")
         
-        # 7z komutuna dosyanın tam yolu veriliyor ve cwd=None ayarlanıyor
+        # 7z komutuna dosyanın tam yolu veriliyor
         command = [
             "7z", 
             "e", 
-            str(Path(DOWNLOAD_DIR) / first_part_filename), # Tam dosya yolu
+            str(Path(DOWNLOAD_DIR) / first_part_filename), 
             f"-o{final_output_path_base}", 
             "-y"
         ]
         
         try:
             # ZIP çıkarma işlemi
-            await asyncio.to_thread(
+            process = await asyncio.to_thread(
                 subprocess.run, 
                 command, 
-                cwd=None, # Tam yolu kullandığımız için cwd'ye gerek yok
+                cwd=None, 
                 capture_output=True, 
                 text=True, 
                 check=True
             )
-            await status_msg.edit_text(f"✅ **{base_name}** ZIP çıkarma işlemi tamamlandı!")
             
+            # 7Z Orijinal Log Çıktısı Eklendi
+            await status_msg.edit_text(
+                f"✅ **{base_name}** ZIP çıkarma işlemi tamamlandı!\n\n"
+                f"**7z Çıktısı (Log):**\n```\n{process.stdout[:500]}...\n```"
+            )
+
+            # --- ZIP SİLME İŞLEMİ (Çıkarma Başarılı Olunca Hemen Sil) ---
+            try:
+                base_zip_name = first_part_filename.replace(".001", "")
+                for part_file in glob.glob(os.path.join(DOWNLOAD_DIR, f"{base_zip_name}*")):
+                    os.remove(part_file)
+                await message.reply_text(f"🗑️ `{base_name}` albümüne ait tüm ZIP parçaları sunucudan silindi.")
+            except Exception as e:
+                await message.reply_text(f"Uyarı: Parçalar silinirken hata oluştu: {e}")
+
             # --- KRİTİK KONTROL: Klasör Boş Mu? ---
-            
             if not any(final_output_path_base.iterdir()):
                 await message.reply_text(
-                    f"❌ KRİTİK HATA: ZIP çıkarma başarılı göründü, ancak `{final_output_path_base.name}` klasörü **boş**.\n"
-                    "Lütfen parçaların tam ve bozuk olmadığından emin olun."
+                    f"❌ KRİTİK HATA: `{final_output_path_base.name}` klasörü **boş** çıktı. Video arama atlanıyor."
                 )
-                continue # Bir sonraki dosyaya geç
+                continue 
             
             # --- SES İŞLEME VE YÜKLEME KISMI ---
             
@@ -352,7 +388,6 @@ async def uz_command(client: Client, message: Message):
                 video_files.extend(glob.glob(str(final_output_path_base / "**" / ext), recursive=True))
             
             if not video_files:
-                # Sizin aldığınız hata burada yakalanır, artık boş klasör kontrolünden sonra çalışır
                 await message.reply_text(
                     f"⚠️ `{final_output_path_base.name}` klasörünün alt klasörlerinde video dosyası bulunamadı. Yükleme atlandı."
                 )
@@ -365,15 +400,15 @@ async def uz_command(client: Client, message: Message):
                 final_audio_index, is_turkish_present = await get_audio_stream_info(str(video_file_path))
                 
                 if final_audio_index is not None:
-                    # Ses işleme
+                    # Ses işleme (yeni dosyanın yolunu alır)
                     new_file_path, result_msg = await process_audio_only(str(video_file_path), final_audio_index, is_turkish_present)
                     await message.reply_text(result_msg)
                     
                     # --- STREAMTAPE YÜKLEME ---
                     if new_file_path:
-                        await upload_to_streamtape(client, message, new_file_path)
+                        await upload_to_streamtape(client, message, new_file_path) # Bu fonksiyon new_file_path dosyasını siliyor.
                         
-                    # Yükleme başarılı olsa bile orijinal video dosyasını sil
+                    # Yükleme sonrası Orijinal video dosyasını sil
                     try: 
                         os.remove(video_file_path)
                         await message.reply_text(f"🗑️ Orijinal video dosyası silindi: `{video_file_path.name}`")
@@ -382,15 +417,6 @@ async def uz_command(client: Client, message: Message):
                         
                 else:
                     await message.reply_text("❌ Ses akışı bilgisi alınamadı, işlem atlanıyor.")
-            
-            # --- ZIP SİLME İŞLEMİ ---
-            try:
-                base_zip_name = first_part_filename.replace(".001", "")
-                for part_file in glob.glob(os.path.join(DOWNLOAD_DIR, f"{base_zip_name}*")):
-                    os.remove(part_file)
-                await message.reply_text(f"🗑️ `{base_name}` albümüne ait tüm ZIP parçaları sunucudan silindi.")
-            except Exception as e:
-                await message.reply_text(f"Uyarı: Parçalar silinirken hata oluştu: {e}")
 
         except subprocess.CalledProcessError as e:
             error_message = f"❌ HATA: **{base_name}** çıkarma işlemi başarısız oldu! Hata Kodu: {e.returncode}\n"
@@ -412,6 +438,7 @@ async def callback_handler(client: Client, cb):
         await cb.answer("Silme işlemi başlatılıyor...")
         
         download_link = cb.data.split("deletestream_", 1)[1] 
+        # Streamtape linkinden dosya tokenini çıkarır
         token = download_link.split("/v/", 1)[-1].split("?", 1)[0]
         
         async with aiohttp.ClientSession() as session:
