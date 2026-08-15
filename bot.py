@@ -27,6 +27,7 @@ try:
     API_ID = int(os.getenv("API_ID"))
     API_HASH = os.getenv("API_HASH")
     STRING_SESSION = os.getenv("STRING_SESSION")
+    LOG_CHANNEL = int(os.getenv("LOG_CHANNEL")) if os.getenv("LOG_CHANNEL") else None
     
     class Config:
         STREAMTAPE_API_USERNAME = os.getenv("STREAMTAPE_API_USERNAME")
@@ -37,6 +38,9 @@ try:
         
     if not STRING_SESSION:
         raise ValueError("STRING_SESSION .env dosyasında bulunamadı.")
+        
+    if not LOG_CHANNEL:
+        raise ValueError("LOG_CHANNEL .env dosyasında bulunamadı.")
 
 except (TypeError, ValueError) as e:
     LOGGER.error(f"HATA: Yapılandırma hatası: {e}")
@@ -76,6 +80,39 @@ def upload_progress(c, t):
 def format_release_name(path, tag):
     p = Path(path)
     return str(p.parent / f"{p.stem}-{tag}.mp4")
+
+
+# --- VİDEO BİLGİ YARDIMCILARI ---
+
+def get_duration(file):
+    try:
+        cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        return int(float(result.stdout.strip()))
+    except Exception:
+        return 0
+
+def get_video_info(file):
+    try:
+        cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", file]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        w, h = result.stdout.strip().split('x')
+        return int(w), int(h)
+    except Exception:
+        return 0, 0
+
+def get_thumbnail(file):
+    try:
+        thumb_path = f"{file}_thumb.jpg"
+        duration = get_duration(file)
+        ss_time = str(max(1, duration // 2))
+        cmd = ["ffmpeg", "-y", "-ss", ss_time, "-i", file, "-vframes", "1", "-q:v", "2", thumb_path]
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if os.path.exists(thumb_path):
+            return thumb_path
+    except Exception as e:
+        LOGGER.error(f"Thumbnail alma hatası: {e}")
+    return None
 
 
 # --- İŞLEME VE ALTYAZI FONKSİYONLARI ---
@@ -233,7 +270,56 @@ async def process_media(file):
     return None
 
 
-# --- STREAMTAPE YÜKLEME ---
+# --- TELEGRAM UPLOAD FONKSİYONU (< 4GB) ---
+
+async def upload(client, file, original_caption):
+    print(f"\n📤 Telegram Log Kanalına Yükleniyor: {Path(file).name}")
+    thumb = get_thumbnail(file)
+    duration = get_duration(file)
+    width, height = get_video_info(file)
+
+    new_filename = os.path.basename(file)
+
+    if original_caption:
+        lines = original_caption.split("\n")
+        lines[0] = f"__{new_filename}__"
+        
+        if len(lines) > 1:
+            desc = "\n".join(lines[1:]).strip()
+            if desc:
+                caption = f"{lines[0]}\n||{desc}||"
+            else:
+                caption = lines[0]
+        else:
+            caption = lines[0]
+    else:
+        caption = f"__{new_filename}__"
+
+    try:
+        await client.send_video(
+            LOG_CHANNEL,
+            file,
+            caption=caption,
+            thumb=thumb,
+            duration=duration,
+            width=width,
+            height=height,
+            supports_streaming=True,
+            progress=upload_progress
+        )
+        print() # Terminal alt satıra geçiş
+        return True
+    except Exception as e:
+        print()
+        LOGGER.error(f"Telegram yükleme hatası: {e}")
+        return False
+    finally:
+        if thumb and os.path.exists(thumb):
+            try: os.remove(thumb)
+            except Exception: pass
+
+
+# --- STREAMTAPE UPLOAD FONKSİYONU (>= 4GB) ---
 
 async def upload_to_streamtape(client: Client, chat_id: int, path_to_file: str) -> bool:
     if not os.path.exists(path_to_file):
@@ -283,7 +369,7 @@ async def upload_to_streamtape(client: Client, chat_id: int, path_to_file: str) 
                 return False
 
             await status_msg.edit_text(
-                f"🎉 **Yükleme Başarılı!**\n\n"
+                f"🎉 **Streamtape Yüklemesi Başarılı!**\n\n"
                 f"📁 **Dosya:** `{filename}`\n"
                 f"🔗 **Link:** {download_link}",
                 disable_web_page_preview=True
@@ -303,8 +389,8 @@ async def process_queue():
     global is_processing
     is_processing = True
     
-    # Desteklenen Arşiv Uzantıları
     ARCHIVE_EXTENSIONS = ('.zip', '.rar', '.7z', '.001', '.part1.rar')
+    FOUR_GB = 4 * 1024 * 1024 * 1024 # 4 GB Sınırı
     
     while not task_queue.empty():
         task = await task_queue.get()
@@ -313,12 +399,17 @@ async def process_queue():
         status_msg = await message.reply_text(f"⚙️ **İşlem Başlatıldı:** `{channel_id}` (ID: {start_id} - {end_id})")
         
         try:
-            # 1. Dosyaları İndirme Aşaması (ZIP ve RAR Destekli)
+            # 1. Dosyaları İndirme Aşaması
             downloaded_files = 0
+            original_caption = None
+            
             for msg_id in range(start_id, end_id + 1):
                 try:
                     msg = await client.get_messages(channel_id, msg_id)
                     if msg and msg.document:
+                        if not original_caption and msg.caption:
+                            original_caption = msg.caption
+                            
                         file_name = msg.document.file_name or ""
                         if file_name.lower().endswith(ARCHIVE_EXTENSIONS) or ".part" in file_name.lower():
                             print(f"\n📥 Arşiv İndiriliyor: {file_name}")
@@ -340,23 +431,19 @@ async def process_queue():
 
             await status_msg.edit_text("📦 Arşiv dosyaları indirildi. Çıkarma işlemi başlatılıyor...")
 
-            # 2. Unzip / Unrar Aşaması (İlk Parçayı veya Tekil Arşivi Bulma)
+            # 2. Unzip / Unrar Aşaması
             first_part_files = []
-            
-            # Bölünmüş arşivlerin ilk parçalarını yakala (.part1.rar, .rar, .zip.001, .zip)
             for ext in ["*.part1.rar", "*.part01.rar", "*.part1.exe", "*.zip.001", "*.7z.001", "*.rar", "*.zip", "*.7z"]:
                 found = glob.glob(os.path.join(DOWNLOAD_DIR, ext))
                 if found:
                     first_part_files.extend(found)
-                    break # İlk bulunan ana parçayı grup olarak işle
+                    break
 
-            # Çiftlemeleri temizle
             first_part_files = list(set(first_part_files))
                 
             for first_part_path in first_part_files:
                 first_part_filename = Path(first_part_path).name
                 
-                # Çıktı klasör adı temizleme
                 base_name = first_part_filename
                 for clean_ext in [".part1.rar", ".part01.rar", ".zip.001", ".7z.001", ".rar", ".zip", ".7z"]:
                     base_name = base_name.replace(clean_ext, "")
@@ -364,7 +451,6 @@ async def process_queue():
                 final_output_path_base = UNZIP_PATH / base_name
                 final_output_path_base.mkdir(parents=True, exist_ok=True)
                 
-                # 7z hem RAR hem ZIP paketlerini dışarı çıkartır
                 command = ["7z", "x", str(first_part_path), f"-o{final_output_path_base}", "-y"]
                 process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                 await process.communicate()
@@ -385,7 +471,15 @@ async def process_queue():
                     processed_video = await process_media(str(video_file_path))
                     
                     if processed_video and os.path.exists(processed_video):
-                        upload_success = await upload_to_streamtape(client, message.chat.id, processed_video)
+                        file_size = os.path.getsize(processed_video)
+                        
+                        # --- YÜKLEME KOŞULU (4 GB KONTROLÜ) ---
+                        if file_size >= FOUR_GB:
+                            await message.reply_text(f"ℹ️ Dosya 4 GB üzerinde (`{file_size / (1024**3):.2f} GB`), Streamtape'e yönlendiriliyor...")
+                            upload_success = await upload_to_streamtape(client, message.chat.id, processed_video)
+                        else:
+                            await message.reply_text(f"ℹ️ Dosya 4 GB altında (`{file_size / (1024**2):.2f} MB`), Log Kanalına yükleniyor...")
+                            upload_success = await upload(client, processed_video, original_caption)
                         
                         if upload_success:
                             try:
@@ -444,4 +538,3 @@ async def uz_command_handler(client: Client, message: Message):
 if __name__ == "__main__":
     LOGGER.info("Userbot Başlatılıyor...")
     app.run()
-            
