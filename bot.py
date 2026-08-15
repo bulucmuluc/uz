@@ -51,7 +51,7 @@ UNZIP_PATH.mkdir(exist_ok=True)
 
 # --- STRING SESSION İLE PYROGRAM CLIENT ---
 app = Client(
-    "zip_userbot",
+    "archive_userbot",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=STRING_SESSION
@@ -78,7 +78,7 @@ def format_release_name(path, tag):
     return str(p.parent / f"{p.stem}-{tag}.mp4")
 
 
-# --- DÜZENLENEN İŞLEME VE ALTYAZI FONKSİYONLARI ---
+# --- İŞLEME VE ALTYAZI FONKSİYONLARI ---
 
 def add_custom_subtitle(input_srt, output_srt, text, start, end):
     try:
@@ -183,7 +183,6 @@ async def hardmux(video, sub):
         LOGGER.error(f"Hardmux hatası: {e}")
         return None
 
-# TR Ses varsa ayıkla; yoksa TR Altyazı arayıp reklamyazısı ekle ve Hardsub yap
 async def process_media(file):
     print(f"\n🎬 Medya İşleniyor: {Path(file).name}")
     
@@ -304,6 +303,9 @@ async def process_queue():
     global is_processing
     is_processing = True
     
+    # Desteklenen Arşiv Uzantıları
+    ARCHIVE_EXTENSIONS = ('.zip', '.rar', '.7z', '.001', '.part1.rar')
+    
     while not task_queue.empty():
         task = await task_queue.get()
         client, message, channel_id, start_id, end_id = task
@@ -311,15 +313,15 @@ async def process_queue():
         status_msg = await message.reply_text(f"⚙️ **İşlem Başlatıldı:** `{channel_id}` (ID: {start_id} - {end_id})")
         
         try:
-            # 1. Dosyaları İndirme Aşaması
+            # 1. Dosyaları İndirme Aşaması (ZIP ve RAR Destekli)
             downloaded_files = 0
             for msg_id in range(start_id, end_id + 1):
                 try:
                     msg = await client.get_messages(channel_id, msg_id)
                     if msg and msg.document:
                         file_name = msg.document.file_name or ""
-                        if ".zip" in file_name:
-                            print(f"\n📥 İndirme Başlıyor: {file_name}")
+                        if file_name.lower().endswith(ARCHIVE_EXTENSIONS) or ".part" in file_name.lower():
+                            print(f"\n📥 Arşiv İndiriliyor: {file_name}")
                             
                             await client.download_media(
                                 message=msg,
@@ -332,32 +334,47 @@ async def process_queue():
                     LOGGER.error(f"Mesaj {msg_id} çekilirken hata: {e}")
 
             if downloaded_files == 0:
-                await status_msg.edit_text("❌ Belirtilen aralıkta indirilecek .zip dosyası bulunamadı.")
+                await status_msg.edit_text("❌ Belirtilen aralıkta indirilecek arşiv (.zip, .rar vb.) bulunamadı.")
                 task_queue.task_done()
                 continue
 
-            await status_msg.edit_text("📦 Arşiv parçaları indirildi. Çıkarma başlatılıyor...")
+            await status_msg.edit_text("📦 Arşiv dosyaları indirildi. Çıkarma işlemi başlatılıyor...")
 
-            # 2. Unzip Aşaması
-            first_part_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.zip.001"))
-            if not first_part_files:
-                first_part_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.zip"))
+            # 2. Unzip / Unrar Aşaması (İlk Parçayı veya Tekil Arşivi Bulma)
+            first_part_files = []
+            
+            # Bölünmüş arşivlerin ilk parçalarını yakala (.part1.rar, .rar, .zip.001, .zip)
+            for ext in ["*.part1.rar", "*.part01.rar", "*.part1.exe", "*.zip.001", "*.7z.001", "*.rar", "*.zip", "*.7z"]:
+                found = glob.glob(os.path.join(DOWNLOAD_DIR, ext))
+                if found:
+                    first_part_files.extend(found)
+                    break # İlk bulunan ana parçayı grup olarak işle
+
+            # Çiftlemeleri temizle
+            first_part_files = list(set(first_part_files))
                 
             for first_part_path in first_part_files:
                 first_part_filename = Path(first_part_path).name
-                base_name = first_part_filename.replace(".zip.001", "").replace(".zip", "")
+                
+                # Çıktı klasör adı temizleme
+                base_name = first_part_filename
+                for clean_ext in [".part1.rar", ".part01.rar", ".zip.001", ".7z.001", ".rar", ".zip", ".7z"]:
+                    base_name = base_name.replace(clean_ext, "")
+                    
                 final_output_path_base = UNZIP_PATH / base_name
                 final_output_path_base.mkdir(parents=True, exist_ok=True)
                 
+                # 7z hem RAR hem ZIP paketlerini dışarı çıkartır
                 command = ["7z", "x", str(first_part_path), f"-o{final_output_path_base}", "-y"]
                 process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                 await process.communicate()
 
-                # Arşiv parçalarını sil
-                base_zip_pattern = str(Path(DOWNLOAD_DIR) / f"{first_part_filename.split('.zip')[0]}*")
-                for part_file in glob.glob(base_zip_pattern):
-                    try: os.remove(part_file)
-                    except Exception: pass
+                # Temizlik - Klasördeki arşiv parçalarını sil
+                for file_in_dir in os.listdir(DOWNLOAD_DIR):
+                    file_p = os.path.join(DOWNLOAD_DIR, file_in_dir)
+                    if os.path.isfile(file_p) and file_in_dir.lower().endswith(ARCHIVE_EXTENSIONS):
+                        try: os.remove(file_p)
+                        except Exception: pass
 
                 # 3. Video Tarama ve İşleme
                 video_files = []
@@ -427,4 +444,4 @@ async def uz_command_handler(client: Client, message: Message):
 if __name__ == "__main__":
     LOGGER.info("Userbot Başlatılıyor...")
     app.run()
-                        
+            
