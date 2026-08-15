@@ -26,6 +26,7 @@ load_dotenv()
 try:
     API_ID = int(os.getenv("API_ID"))
     API_HASH = os.getenv("API_HASH")
+    STRING_SESSION = os.getenv("STRING_SESSION")
     
     class Config:
         STREAMTAPE_API_USERNAME = os.getenv("STREAMTAPE_API_USERNAME")
@@ -33,10 +34,13 @@ try:
         
     if not Config.STREAMTAPE_API_USERNAME or not Config.STREAMTAPE_API_PASS:
         raise ValueError("Streamtape API bilgileri eksik.")
+        
+    if not STRING_SESSION:
+        raise ValueError("STRING_SESSION .env dosyasında bulunamadı.")
 
 except (TypeError, ValueError) as e:
     LOGGER.error(f"HATA: Yapılandırma hatası: {e}")
-    exit()
+    exit(1)
 
 DOWNLOAD_DIR = os.getenv("DOWNLOAD_DIR", "downloads")
 UNZIP_SUBDIR = "unzip" 
@@ -45,10 +49,12 @@ Path(DOWNLOAD_DIR).mkdir(exist_ok=True)
 UNZIP_PATH = Path(DOWNLOAD_DIR) / UNZIP_SUBDIR
 UNZIP_PATH.mkdir(exist_ok=True)
 
+# --- STRING SESSION İLE PYROGRAM CLIENT ---
 app = Client(
     "zip_userbot",
     api_id=API_ID,
-    api_hash=API_HASH
+    api_hash=API_HASH,
+    session_string=STRING_SESSION
 )
 
 task_queue = asyncio.Queue()
@@ -153,7 +159,6 @@ async def extract_subtitle(path):
 async def hardmux(video, sub):
     try:
         out = format_release_name(video, "TRSub")
-        # Windows ortamı için altyazı yolu kaçış karakteri düzenlemesi
         sub_path_escaped = sub.replace("\\", "/").replace(":", "\\:")
         
         cmd = [
@@ -178,7 +183,7 @@ async def hardmux(video, sub):
         LOGGER.error(f"Hardmux hatası: {e}")
         return None
 
-# MANTIK MOTORU: TR Ses varsa işle, yoksa Hardsub dene, o da yoksa Varsayılan İşle
+# TR Ses varsa ayıkla; yoksa TR Altyazı arayıp reklamyazısı ekle ve Hardsub yap
 async def process_media(file):
     print(f"\n🎬 Medya İşleniyor: {Path(file).name}")
     
@@ -354,17 +359,15 @@ async def process_queue():
                     try: os.remove(part_file)
                     except Exception: pass
 
-                # 3. Video Tarama ve Yeni Ses/Altyazı Mantığı ile İşleme
+                # 3. Video Tarama ve İşleme
                 video_files = []
                 for ext in ["*.mkv", "*.mp4", "*.avi", "*.mov"]:
                     video_files.extend(final_output_path_base.rglob(ext))
                 
                 for video_file_path in video_files:
-                    # Yeni süreç çağrısı (process_media)
                     processed_video = await process_media(str(video_file_path))
                     
                     if processed_video and os.path.exists(processed_video):
-                        # Streamtape Yükleme
                         upload_success = await upload_to_streamtape(client, message.chat.id, processed_video)
                         
                         if upload_success:
@@ -424,3 +427,4 @@ async def uz_command_handler(client: Client, message: Message):
 if __name__ == "__main__":
     LOGGER.info("Userbot Başlatılıyor...")
     app.run()
+                        
